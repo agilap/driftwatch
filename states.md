@@ -54,9 +54,9 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Ingest API
 | Task | Status | Notes |
 |---|---|---|
-| `POST /models` — register model | ⏳ | |
-| `GET /models` — list models | ⏳ | |
-| `POST /ingest/reference` — upload reference distribution | ⏳ | Compute & store histogram + stats |
+| `POST /models` — register model | ✅ | |
+| `GET /models` — list models | ✅ | |
+| `POST /ingest/reference` — upload reference distribution | ✅ | Compute & store histogram + stats |
 | `POST /ingest/snapshot` — daily production batch | ⏳ | Validate → compute stats → store |
 | `GET /health` — liveness probe | ⏳ | |
 | Pydantic schemas for all payloads | ⏳ | |
@@ -174,4 +174,9 @@ _None currently._
 - Tasks completed: SQLAlchemy models — models table; SQLAlchemy models — reference_distributions; SQLAlchemy models — feature_importances; SQLAlchemy models — snapshots; SQLAlchemy models — drift_scores; SQLAlchemy models — health_reports; SQLAlchemy models — alerts
 - Tests added: yes — 3 tests in tests/test_models.py
 - Next session: Ingest API endpoints and service-layer persistence
+**[2026-03-22]** — Add model registry and reference distribution ingest endpoints
+- Files changed: app/schemas/model.py, app/schemas/ingest.py, app/services/model_service.py, app/services/reference_service.py, app/routers/models.py, app/routers/ingest.py, app/main.py, tests/test_model_service.py, tests/test_ingest_reference.py, states.md
+- Tasks completed: POST /models — register model; GET /models — list models; POST /ingest/reference — upload reference distribution
+- Tests added: yes — 9 tests across tests/test_model_service.py and tests/test_ingest_reference.py
+- Next session: POST /ingest/snapshot endpoint and drift trigger pipeline
 <!-- SESSION LOG END -->

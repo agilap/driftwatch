@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
-class Snapshot(Base):
-    """Daily production feature snapshot distributions."""
+class ReferenceDistribution(Base):
+    """Reference (training) feature distribution per model."""
 
-    __tablename__ = "snapshots"
-    __table_args__ = (Index("ix_snapshots_model_id_window_date", "model_id", "window_date"),)
+    __tablename__ = "reference_distributions"
+    __table_args__ = (
+        UniqueConstraint("model_id", "feature_name", name="uq_refdist_model_feature"),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -26,15 +28,13 @@ class Snapshot(Base):
         ForeignKey("models.id", ondelete="CASCADE"),
         nullable=False,
     )
-    window_date: Mapped[date] = mapped_column(Date, nullable=False)
     feature_name: Mapped[str] = mapped_column(Text, nullable=False)
     distribution: Mapped[dict] = mapped_column(JSONB, nullable=False)
     stats: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    sample_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
+    registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
         nullable=False,
     )
 
-    model = relationship("ModelRegistry", back_populates="snapshots")
+    model = relationship("ModelRegistry", back_populates="reference_distributions")

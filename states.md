@@ -43,13 +43,13 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Database Layer
 | Task | Status | Notes |
 |---|---|---|
-| SQLAlchemy models — `models` table | ⏳ | |
-| SQLAlchemy models — `reference_distributions` | ⏳ | |
-| SQLAlchemy models — `feature_importances` | ⏳ | |
-| SQLAlchemy models — `snapshots` | ⏳ | |
-| SQLAlchemy models — `drift_scores` | ⏳ | |
-| SQLAlchemy models — `health_reports` | ⏳ | |
-| SQLAlchemy models — `alerts` | ⏳ | |
+| SQLAlchemy models — `models` table | ✅ | |
+| SQLAlchemy models — `reference_distributions` | ✅ | |
+| SQLAlchemy models — `feature_importances` | ✅ | |
+| SQLAlchemy models — `snapshots` | ✅ | |
+| SQLAlchemy models — `drift_scores` | ✅ | |
+| SQLAlchemy models — `health_reports` | ✅ | |
+| SQLAlchemy models — `alerts` | ✅ | |
 
 ### Ingest API
 | Task | Status | Notes |
@@ -169,4 +169,9 @@ _None currently._
 - Tasks completed: Initialise repo + folder structure; docker-compose.yml with PostgreSQL; Dockerfile for FastAPI app; .env.example with all required vars; requirements.txt pinned deps; Alembic init + base migration
 - Tests added: 1 (health endpoint smoke test)
 - Next session: Database layer — SQLAlchemy models + Alembic migrations
+**[2026-03-22]** — Add full ORM schema and Alembic migration for all database tables
+- Files changed: app/models/model_registry.py, app/models/reference_distribution.py, app/models/feature_importance.py, app/models/snapshot.py, app/models/drift_score.py, app/models/health_report.py, app/models/alert.py, app/models/__init__.py, migrations/env.py, migrations/versions/0001_initial.py, tests/test_models.py, states.md
+- Tasks completed: SQLAlchemy models — models table; SQLAlchemy models — reference_distributions; SQLAlchemy models — feature_importances; SQLAlchemy models — snapshots; SQLAlchemy models — drift_scores; SQLAlchemy models — health_reports; SQLAlchemy models — alerts
+- Tests added: yes — 3 tests in tests/test_models.py
+- Next session: Ingest API endpoints and service-layer persistence
 <!-- SESSION LOG END -->

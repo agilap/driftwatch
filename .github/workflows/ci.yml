@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Ruff
+        run: ruff check .
+      - name: Black
+        run: black --check --line-length 100 .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: driftwatch
+          POSTGRES_PASSWORD: driftwatch
+          POSTGRES_DB: driftwatch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U driftwatch -d driftwatch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch
+      SECRET_KEY: changeme-in-production
+      ALERT_WEBHOOK_URL: ""
+      REPORT_SCHEDULE_CRON: "0 0 * * 1"
+      LOG_LEVEL: INFO
+      PSI_YELLOW_THRESHOLD: "0.10"
+      PSI_RED_THRESHOLD: "0.20"
+      KS_PVALUE_THRESHOLD: "0.05"
+      MIN_SAMPLE_WARNING: "30"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Pytest
+        run: pytest -q

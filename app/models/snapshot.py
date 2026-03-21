@@ -1,0 +1,1 @@
+"""Snapshot ORM placeholder."""

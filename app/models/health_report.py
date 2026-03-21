@@ -1,0 +1,1 @@
+"""Health report ORM placeholder."""

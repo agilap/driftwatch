@@ -68,7 +68,9 @@ def run_migrations() -> None:
 
 
 @pytest_asyncio.fixture
-async def integration_context() -> AsyncGenerator[tuple[AsyncClient, async_sessionmaker[AsyncSession]], None]:
+async def integration_context() -> (
+    AsyncGenerator[tuple[AsyncClient, async_sessionmaker[AsyncSession]], None]
+):
     """Provide isolated HTTP client and DB session factory for each integration test."""
     engine = create_async_engine(_database_url(), future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -117,7 +119,12 @@ async def _register_reference(client: AsyncClient, model_id: UUID) -> None:
     assert response.status_code == 200
 
 
-async def _ingest_snapshot(client: AsyncClient, model_id: UUID, timestamp: str, features: dict[str, list[float]]) -> None:
+async def _ingest_snapshot(
+    client: AsyncClient,
+    model_id: UUID,
+    timestamp: str,
+    features: dict[str, list[float]],
+) -> None:
     response = await client.post(
         "/ingest/snapshot",
         json={
@@ -132,17 +139,25 @@ async def _ingest_snapshot(client: AsyncClient, model_id: UUID, timestamp: str, 
 async def _prepare_august_pipeline(client: AsyncClient, model_name: str) -> UUID:
     model_id = await _create_model(client, name=model_name)
     await _register_reference(client, model_id=model_id)
-    await _ingest_snapshot(client, model_id=model_id, timestamp=JANUARY_TS, features=JAN_SNAPSHOT_FEATURES)
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=date(2026, 1, 15))
-    await _ingest_snapshot(client, model_id=model_id, timestamp=AUGUST_TS, features=AUG_SNAPSHOT_FEATURES)
+    await _ingest_snapshot(
+        client, model_id=model_id, timestamp=JANUARY_TS, features=JAN_SNAPSHOT_FEATURES
+    )
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=date(2026, 1, 15)
+    )
+    await _ingest_snapshot(
+        client, model_id=model_id, timestamp=AUGUST_TS, features=AUG_SNAPSHOT_FEATURES
+    )
     return model_id
 
 
-async def run_drift_analysis_for_date(client: AsyncClient, model_id: UUID, target_date: date) -> None:
+async def run_drift_analysis_for_date(
+    client: AsyncClient, model_id: UUID, target_date: date
+) -> None:
     """Run drift analysis synchronously through a direct DB session."""
     override = app.dependency_overrides[get_db]
     async_gen = override()
-    db = await anext(async_gen)
+    db = await async_gen.__anext__()
     try:
         await run_drift_analysis(db=db, model_id=model_id, window_date=target_date)
     finally:
@@ -164,7 +179,9 @@ async def test_full_pipeline_register_model(
     assert body["name"] == model_name
 
     async with session_factory() as session:
-        row = await session.execute(select(ModelRegistry).where(ModelRegistry.id == model_id))
+        row = await session.execute(
+            select(ModelRegistry).where(ModelRegistry.id == model_id)
+        )
         assert row.scalar_one_or_none() is not None
 
 
@@ -207,7 +224,11 @@ async def test_full_pipeline_ingest_january_snapshot(
     assert response.status_code == 200
     body = response.json()
     assert body["drift_triggered"] is True
-    assert set(body["features_recorded"]) == {"income", "credit_score", "loan_term_months"}
+    assert set(body["features_recorded"]) == {
+        "income",
+        "credit_score",
+        "loan_term_months",
+    }
 
 
 @pytest.mark.asyncio
@@ -219,7 +240,9 @@ async def test_full_pipeline_drift_january_no_alert(
     await _register_reference(client, model_id)
     await _ingest_snapshot(client, model_id, JANUARY_TS, JAN_SNAPSHOT_FEATURES)
 
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=date(2026, 1, 15))
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=date(2026, 1, 15)
+    )
 
     async with session_factory() as session:
         result = await session.execute(
@@ -230,7 +253,9 @@ async def test_full_pipeline_drift_january_no_alert(
         )
         drift_rows = result.scalars().all()
 
-        alert_rows = await session.execute(select(Alert).where(Alert.model_id == model_id))
+        alert_rows = await session.execute(
+            select(Alert).where(Alert.model_id == model_id)
+        )
         alerts = alert_rows.scalars().all()
 
     assert len(drift_rows) == 3
@@ -264,9 +289,13 @@ async def test_full_pipeline_drift_august_detects_shift(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, session_factory = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
 
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     async with session_factory() as session:
         result = await session.execute(
@@ -277,7 +306,9 @@ async def test_full_pipeline_drift_august_detects_shift(
         )
         rows = {row.feature_name: row for row in result.scalars().all()}
 
-        alerts_result = await session.execute(select(Alert).where(Alert.model_id == model_id))
+        alerts_result = await session.execute(
+            select(Alert).where(Alert.model_id == model_id)
+        )
         alerts = alerts_result.scalars().all()
 
     assert rows["income"].severity == "red"
@@ -285,7 +316,9 @@ async def test_full_pipeline_drift_august_detects_shift(
     assert rows["credit_score"].severity in {"red", "yellow"}
     assert rows["loan_term_months"].severity in {"green", "yellow"}
     assert any(alert.alert_type == "drift_red" for alert in alerts)
-    assert float(rows["income"].weighted_score or 0.0) > float(rows["loan_term_months"].weighted_score or 0.0)
+    assert float(rows["income"].weighted_score or 0.0) > float(
+        rows["loan_term_months"].weighted_score or 0.0
+    )
 
 
 @pytest.mark.asyncio
@@ -293,8 +326,12 @@ async def test_full_pipeline_alerts_created_correctly(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, _ = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     response = await client.get(f"/alerts?model_id={model_id}")
 
@@ -310,8 +347,12 @@ async def test_full_pipeline_resolve_alert(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, _ = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     list_response = await client.get(f"/alerts?model_id={model_id}")
     alert_id = list_response.json()["items"][0]["id"]
@@ -330,8 +371,12 @@ async def test_full_pipeline_generate_report(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, _ = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     response = await client.post(
         f"/reports/{model_id}/generate",
@@ -360,8 +405,12 @@ async def test_full_pipeline_report_markdown_complete(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, _ = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
     await client.post(
         f"/reports/{model_id}/generate",
         json={"week_start": AUGUST_WEEK_START.isoformat()},
@@ -382,8 +431,12 @@ async def test_get_drift_scores_endpoint(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, _ = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     response = await client.get(f"/drift/{model_id}/{AUGUST_WINDOW_DATE.isoformat()}")
 
@@ -398,12 +451,18 @@ async def test_idempotency_reingest_same_snapshot(
     integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     client, session_factory = integration_context
-    model_id = await _prepare_august_pipeline(client, model_name=f"loan-scorer-v3-{uuid4()}")
+    model_id = await _prepare_august_pipeline(
+        client, model_name=f"loan-scorer-v3-{uuid4()}"
+    )
 
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     # Reingest the same August snapshot date.
-    await _ingest_snapshot(client, model_id=model_id, timestamp=AUGUST_TS, features=AUG_SNAPSHOT_FEATURES)
+    await _ingest_snapshot(
+        client, model_id=model_id, timestamp=AUGUST_TS, features=AUG_SNAPSHOT_FEATURES
+    )
 
     async with session_factory() as session:
         snap_result = await session.execute(
@@ -416,7 +475,9 @@ async def test_idempotency_reingest_same_snapshot(
 
     assert len(snapshot_rows) == 3
 
-    await run_drift_analysis_for_date(client, model_id=model_id, target_date=AUGUST_WINDOW_DATE)
+    await run_drift_analysis_for_date(
+        client, model_id=model_id, target_date=AUGUST_WINDOW_DATE
+    )
 
     async with session_factory() as session:
         drift_result = await session.execute(

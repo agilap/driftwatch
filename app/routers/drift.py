@@ -28,7 +28,9 @@ async def get_drift_window_endpoint(
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    rows = await get_drift_scores_for_window(db=db, model_id=model_id, window_date=window_date)
+    rows = await get_drift_scores_for_window(
+        db=db, model_id=model_id, window_date=window_date
+    )
     return [
         DriftScoreResponse(
             id=row.id,
@@ -61,7 +63,9 @@ async def get_latest_drift_window_endpoint(
     if latest_window is None:
         raise HTTPException(status_code=404, detail="No drift scores found for model")
 
-    rows = await get_drift_scores_for_window(db=db, model_id=model_id, window_date=latest_window)
+    rows = await get_drift_scores_for_window(
+        db=db, model_id=model_id, window_date=latest_window
+    )
 
     features: list[FeatureDriftSummary] = []
     red_count = 0

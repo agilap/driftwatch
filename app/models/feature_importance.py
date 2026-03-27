@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Text, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,9 +23,12 @@ class FeatureImportance(Base):
 
     __tablename__ = "feature_importances"
     __table_args__ = (
-        UniqueConstraint("model_id", "feature_name", name="uq_feature_importance_model_feature"),
+        UniqueConstraint(
+            "model_id", "feature_name", name="uq_feature_importance_model_feature"
+        ),
         CheckConstraint(
-            "method IN ('shap','coefficient','manual')", name="ck_feature_importance_method"
+            "method IN ('shap','coefficient','manual')",
+            name="ck_feature_importance_method",
         ),
     )
 

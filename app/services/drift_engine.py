@@ -39,7 +39,9 @@ class DriftScoreResult(BaseModel):
     computed_at: datetime
 
 
-def _validate_inputs(reference: np.ndarray, production: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _validate_inputs(
+    reference: np.ndarray, production: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Validate statistical test inputs and cast to float arrays.
 
     Args:
@@ -107,7 +109,10 @@ def _resolve_feature_weights(
         equal = 1.0 / len(feature_names)
         return {feature: equal for feature in feature_names}
 
-    clipped = {feature: max(0.0, float(importances.get(feature, 0.0))) for feature in feature_names}
+    clipped = {
+        feature: max(0.0, float(importances.get(feature, 0.0)))
+        for feature in feature_names
+    }
     total = float(sum(clipped.values()))
     if total <= 0:
         equal = 1.0 / len(feature_names)
@@ -136,7 +141,9 @@ def _reconstruct_samples_from_histogram(distribution: dict) -> np.ndarray:
     return np.repeat(midpoints, safe_counts)
 
 
-def compute_ks_test(reference: np.ndarray, production: np.ndarray) -> dict[str, float | bool]:
+def compute_ks_test(
+    reference: np.ndarray, production: np.ndarray
+) -> dict[str, float | bool]:
     """Compute two-sample Kolmogorov-Smirnov test.
 
     Args:
@@ -173,7 +180,9 @@ def compute_psi(reference: np.ndarray, production: np.ndarray, bins: int = 10) -
     ref_counts, _ = np.histogram(ref, bins=edges)
     prod_counts, _ = np.histogram(prod, bins=edges)
 
-    if np.any(ref_counts < MIN_BIN_SAMPLES_WARNING) or np.any(prod_counts < MIN_BIN_SAMPLES_WARNING):
+    if np.any(ref_counts < MIN_BIN_SAMPLES_WARNING) or np.any(
+        prod_counts < MIN_BIN_SAMPLES_WARNING
+    ):
         logger.warning(
             "Low histogram bin samples detected for PSI; minimum bin count is %d",
             min(int(np.min(ref_counts)), int(np.min(prod_counts))),
@@ -189,7 +198,9 @@ def compute_psi(reference: np.ndarray, production: np.ndarray, bins: int = 10) -
     return float(np.clip(psi, 0.0, 1.0))
 
 
-def compute_js_divergence(reference: np.ndarray, production: np.ndarray, bins: int = 10) -> float:
+def compute_js_divergence(
+    reference: np.ndarray, production: np.ndarray, bins: int = 10
+) -> float:
     """Compute Jensen-Shannon divergence proxy on binned probability vectors.
 
     Args:
@@ -213,7 +224,9 @@ def compute_js_divergence(reference: np.ndarray, production: np.ndarray, bins: i
     return float(np.clip(js_score, 0.0, 1.0))
 
 
-def compute_chi_square(reference: np.ndarray, production: np.ndarray) -> dict[str, float | bool]:
+def compute_chi_square(
+    reference: np.ndarray, production: np.ndarray
+) -> dict[str, float | bool]:
     """Compute chi-square goodness-of-fit test for categorical arrays.
 
     Args:
@@ -229,11 +242,19 @@ def compute_chi_square(reference: np.ndarray, production: np.ndarray) -> dict[st
     prod_categories, prod_counts = np.unique(prod, return_counts=True)
     categories = np.union1d(ref_categories, prod_categories)
 
-    ref_map = {category: int(count) for category, count in zip(ref_categories, ref_counts)}
-    prod_map = {category: int(count) for category, count in zip(prod_categories, prod_counts)}
+    ref_map = {
+        category: int(count) for category, count in zip(ref_categories, ref_counts)
+    }
+    prod_map = {
+        category: int(count) for category, count in zip(prod_categories, prod_counts)
+    }
 
-    aligned_ref = np.asarray([ref_map.get(category, 0) for category in categories], dtype=float)
-    aligned_prod = np.asarray([prod_map.get(category, 0) for category in categories], dtype=float)
+    aligned_ref = np.asarray(
+        [ref_map.get(category, 0) for category in categories], dtype=float
+    )
+    aligned_prod = np.asarray(
+        [prod_map.get(category, 0) for category in categories], dtype=float
+    )
 
     expected = (aligned_ref / max(np.sum(aligned_ref), 1.0)) * np.sum(aligned_prod)
     expected = np.maximum(expected, EPSILON)
@@ -326,13 +347,17 @@ async def run_drift_analysis(
     reference_rows = list(ref_result.scalars().all())
 
     snap_result = await db.execute(
-        select(Snapshot).where(Snapshot.model_id == model_id, Snapshot.window_date == window_date)
+        select(Snapshot).where(
+            Snapshot.model_id == model_id, Snapshot.window_date == window_date
+        )
     )
     snapshot_rows = list(snap_result.scalars().all())
 
     reference_by_feature = {row.feature_name: row for row in reference_rows}
     snapshot_by_feature = {row.feature_name: row for row in snapshot_rows}
-    shared_features = sorted(set(reference_by_feature).intersection(snapshot_by_feature))
+    shared_features = sorted(
+        set(reference_by_feature).intersection(snapshot_by_feature)
+    )
 
     raw_importances = await importance_scorer.load_importances(db=db, model_id=model_id)
     if raw_importances:

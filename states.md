@@ -121,11 +121,11 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Testing
 | Task | Status | Notes |
 |---|---|---|
-| Unit tests — `drift_engine.py` | ⏳ | KS, PSI, JS edge cases |
-| Unit tests — `importance_scorer.py` | ⏳ | |
-| Integration tests — ingest endpoints | ⏳ | pytest + httpx |
-| Integration tests — report generation | ⏳ | |
-| Test with synthetic drift dataset | ⏳ | Loan model scenario from brief |
+| Unit tests — `drift_engine.py` | ✅ | KS, PSI, JS edge cases |
+| Unit tests — `importance_scorer.py` | ✅ | |
+| Integration tests — ingest endpoints | ✅ | pytest + httpx |
+| Integration tests — report generation | ✅ | |
+| Test with synthetic drift dataset | ✅ | Loan model scenario from brief |
 
 ### CI / CD
 | Task | Status | Notes |
@@ -204,4 +204,9 @@ _None currently._
 - Tasks completed: weekly aggregation, overall health scoring, feature ranking, output shift analysis, recommendations, markdown/json rendering, report persistence upsert, manual report generation API, weekly scheduler registration
 - Tests added: yes — 10 tests in tests/test_report_generator.py
 - Next session: endpoint-level integration tests for /reports APIs and CI scheduler smoke validation
+**[2026-03-27]** — Add full end-to-end pipeline integration and edge-case test suites
+- Files changed: tests/test_integration.py, tests/test_edge_cases.py, states.md
+- Tasks completed: 12-step end-to-end loan scenario coverage (models, reference, snapshots, drift, alerts, reports, idempotency) and 5 edge-case tests for 422/404 and PSI stability
+- Tests added: yes — 17 tests across tests/test_integration.py and tests/test_edge_cases.py
+- Next session: CI parallelization and runtime optimization for full integration suite
 <!-- SESSION LOG END -->

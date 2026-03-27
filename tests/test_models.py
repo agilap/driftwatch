@@ -86,7 +86,9 @@ async def test_fk_constraints_enforced(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unique_constraints_reference_and_importance(db_session: AsyncSession) -> None:
+async def test_unique_constraints_reference_and_importance(
+    db_session: AsyncSession,
+) -> None:
     model = ModelRegistry(name=f"model-{uuid4()}", version="v1")
     db_session.add(model)
     await db_session.flush()
@@ -95,13 +97,29 @@ async def test_unique_constraints_reference_and_importance(db_session: AsyncSess
         model_id=model.id,
         feature_name="credit_score",
         distribution={"bins": [0, 1], "counts": [20]},
-        stats={"mean": 0.6, "std": 0.1, "min": 0.0, "max": 1.0, "p25": 0.3, "p50": 0.6, "p75": 0.8},
+        stats={
+            "mean": 0.6,
+            "std": 0.1,
+            "min": 0.0,
+            "max": 1.0,
+            "p25": 0.3,
+            "p50": 0.6,
+            "p75": 0.8,
+        },
     )
     ref_two = ReferenceDistribution(
         model_id=model.id,
         feature_name="credit_score",
         distribution={"bins": [0, 1], "counts": [30]},
-        stats={"mean": 0.7, "std": 0.1, "min": 0.0, "max": 1.0, "p25": 0.3, "p50": 0.6, "p75": 0.8},
+        stats={
+            "mean": 0.7,
+            "std": 0.1,
+            "min": 0.0,
+            "max": 1.0,
+            "p25": 0.3,
+            "p50": 0.6,
+            "p75": 0.8,
+        },
     )
     db_session.add_all([ref_one, ref_two])
 

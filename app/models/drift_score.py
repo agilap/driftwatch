@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Text, text
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,7 +24,9 @@ class DriftScore(Base):
 
     __tablename__ = "drift_scores"
     __table_args__ = (
-        CheckConstraint("severity IN ('green','yellow','red')", name="ck_drift_scores_severity"),
+        CheckConstraint(
+            "severity IN ('green','yellow','red')", name="ck_drift_scores_severity"
+        ),
         Index("ix_drift_scores_model_id_window_date", "model_id", "window_date"),
     )
 

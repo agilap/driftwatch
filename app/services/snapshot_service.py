@@ -9,12 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.snapshot import Snapshot
 from app.schemas.ingest import SnapshotPayload, SnapshotResponse
-from app.services.model_service import _compute_distribution_stats, _compute_histogram, get_model
+from app.services.model_service import (
+    _compute_distribution_stats,
+    _compute_histogram,
+    get_model,
+)
 
 PREDICTIONS_FEATURE_NAME = "__predictions__"
 
 
-async def ingest_snapshot(db: AsyncSession, payload: SnapshotPayload) -> SnapshotResponse:
+async def ingest_snapshot(
+    db: AsyncSession, payload: SnapshotPayload
+) -> SnapshotResponse:
     """Ingest daily production feature distributions for a model."""
     model = await get_model(db=db, model_id=payload.model_id)
     if model is None:
@@ -30,7 +36,9 @@ async def ingest_snapshot(db: AsyncSession, payload: SnapshotPayload) -> Snapsho
 
     for feature_name, values in feature_batches.items():
         if not values:
-            raise HTTPException(status_code=422, detail=f"Feature '{feature_name}' has no values")
+            raise HTTPException(
+                status_code=422, detail=f"Feature '{feature_name}' has no values"
+            )
 
         if sample_count == 0:
             sample_count = len(values)

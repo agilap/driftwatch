@@ -53,7 +53,9 @@ def upgrade() -> None:
         ),
         sa.Column("model_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("feature_name", sa.Text(), nullable=False),
-        sa.Column("distribution", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "distribution", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("stats", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column(
             "registered_at",
@@ -63,7 +65,9 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["model_id"], ["models.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("model_id", "feature_name", name="uq_refdist_model_feature"),
+        sa.UniqueConstraint(
+            "model_id", "feature_name", name="uq_refdist_model_feature"
+        ),
     )
 
     op.create_table(
@@ -85,11 +89,14 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "method IN ('shap','coefficient','manual')", name="ck_feature_importance_method"
+            "method IN ('shap','coefficient','manual')",
+            name="ck_feature_importance_method",
         ),
         sa.ForeignKeyConstraint(["model_id"], ["models.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("model_id", "feature_name", name="uq_feature_importance_model_feature"),
+        sa.UniqueConstraint(
+            "model_id", "feature_name", name="uq_feature_importance_model_feature"
+        ),
     )
 
     op.create_table(
@@ -103,7 +110,9 @@ def upgrade() -> None:
         sa.Column("model_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("window_date", sa.Date(), nullable=False),
         sa.Column("feature_name", sa.Text(), nullable=False),
-        sa.Column("distribution", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "distribution", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("stats", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("sample_count", sa.Integer(), nullable=True),
         sa.Column(
@@ -116,7 +125,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_snapshots_model_id_window_date", "snapshots", ["model_id", "window_date"], unique=False
+        "ix_snapshots_model_id_window_date",
+        "snapshots",
+        ["model_id", "window_date"],
+        unique=False,
     )
 
     op.create_table(
@@ -142,7 +154,9 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint("severity IN ('green','yellow','red')", name="ck_drift_scores_severity"),
+        sa.CheckConstraint(
+            "severity IN ('green','yellow','red')", name="ck_drift_scores_severity"
+        ),
         sa.ForeignKeyConstraint(["model_id"], ["models.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -165,7 +179,9 @@ def upgrade() -> None:
         sa.Column("week_start", sa.Date(), nullable=False),
         sa.Column("week_end", sa.Date(), nullable=False),
         sa.Column("overall_score", sa.Float(), nullable=True),
-        sa.Column("report_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "report_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+        ),
         sa.Column("report_markdown", sa.Text(), nullable=True),
         sa.Column(
             "generated_at",
@@ -198,7 +214,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "alert_type IN ('drift_red','output_shift','data_gap')", name="ck_alerts_alert_type"
+            "alert_type IN ('drift_red','output_shift','data_gap')",
+            name="ck_alerts_alert_type",
         ),
         sa.ForeignKeyConstraint(["model_id"], ["models.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),

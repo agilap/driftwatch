@@ -18,7 +18,12 @@ from app.models.alert import Alert
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
-from app.services.alert_service import _dispatch_alert, create_alert, list_alerts, resolve_alert
+from app.services.alert_service import (
+    _dispatch_alert,
+    create_alert,
+    list_alerts,
+    resolve_alert,
+)
 from app.services.drift_engine import run_drift_analysis
 from app.services.model_service import _compute_distribution_stats, _compute_histogram
 
@@ -89,7 +94,9 @@ async def test_create_alert_stored_in_db(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_alert_red_drift_triggers_on_red_severity(db_session: AsyncSession) -> None:
+async def test_create_alert_red_drift_triggers_on_red_severity(
+    db_session: AsyncSession,
+) -> None:
     model_id = await _create_model(db_session)
 
     reference_values = [1.0, 2.0, 3.0, 4.0, 5.0] * 20
@@ -115,7 +122,9 @@ async def test_create_alert_red_drift_triggers_on_red_severity(db_session: Async
     )
     await db_session.commit()
 
-    await run_drift_analysis(db=db_session, model_id=model_id, window_date=date(2026, 3, 27))
+    await run_drift_analysis(
+        db=db_session, model_id=model_id, window_date=date(2026, 3, 27)
+    )
 
     result = await db_session.execute(select(Alert).where(Alert.model_id == model_id))
     alerts = result.scalars().all()
@@ -125,7 +134,9 @@ async def test_create_alert_red_drift_triggers_on_red_severity(db_session: Async
 
 
 @pytest.mark.asyncio
-async def test_dispatch_webhook_called_when_url_configured(db_session: AsyncSession) -> None:
+async def test_dispatch_webhook_called_when_url_configured(
+    db_session: AsyncSession,
+) -> None:
     model_id = await _create_model(db_session)
     alert = Alert(
         model_id=model_id,
@@ -138,7 +149,10 @@ async def test_dispatch_webhook_called_when_url_configured(db_session: AsyncSess
     await db_session.commit()
     await db_session.refresh(alert)
 
-    with patch("app.services.alert_service.settings.alert_webhook_url", "https://example.com/webhook"):
+    with patch(
+        "app.services.alert_service.settings.alert_webhook_url",
+        "https://example.com/webhook",
+    ):
         with patch("httpx.AsyncClient.post", new=AsyncMock()) as post_mock:
             await _dispatch_alert(alert)
 
@@ -159,8 +173,13 @@ async def test_dispatch_no_crash_when_webhook_fails(db_session: AsyncSession) ->
     await db_session.commit()
     await db_session.refresh(alert)
 
-    with patch("app.services.alert_service.settings.alert_webhook_url", "https://example.com/webhook"):
-        with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=Exception("boom"))):
+    with patch(
+        "app.services.alert_service.settings.alert_webhook_url",
+        "https://example.com/webhook",
+    ):
+        with patch(
+            "httpx.AsyncClient.post", new=AsyncMock(side_effect=Exception("boom"))
+        ):
             await _dispatch_alert(alert)
 
 
@@ -206,7 +225,9 @@ async def test_resolve_alert_sets_resolved_at(db_session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_resolve_alert_not_found_returns_404(db_session: AsyncSession) -> None:
     with pytest.raises(HTTPException) as exc_info:
-        await resolve_alert(db=db_session, alert_id=UUID("00000000-0000-0000-0000-000000000001"))
+        await resolve_alert(
+            db=db_session, alert_id=UUID("00000000-0000-0000-0000-000000000001")
+        )
 
     assert exc_info.value.status_code == 404
 
@@ -233,7 +254,9 @@ async def test_list_alerts_filters_resolved(db_session: AsyncSession) -> None:
     )
     await resolve_alert(db=db_session, alert_id=resolved.id)
 
-    unresolved_items = await list_alerts(db=db_session, model_id=model_id, resolved=False)
+    unresolved_items = await list_alerts(
+        db=db_session, model_id=model_id, resolved=False
+    )
     resolved_items = await list_alerts(db=db_session, model_id=model_id, resolved=True)
 
     assert any(item.id == unresolved.id for item in unresolved_items)

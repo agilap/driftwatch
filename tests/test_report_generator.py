@@ -103,7 +103,9 @@ def test_overall_health_score_clamped_to_range() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recommendation_retraining_when_score_below_60(db_session: AsyncSession) -> None:
+async def test_recommendation_retraining_when_score_below_60(
+    db_session: AsyncSession,
+) -> None:
     model = await _create_model(db_session)
     week_start = date(2026, 3, 16)
     week_end = date(2026, 3, 22)
@@ -137,7 +139,9 @@ async def test_recommendation_red_feature_flagged(db_session: AsyncSession) -> N
     report = await generate_report(db_session, model.id, week_start, week_end)
     recommendations = report.report_json["recommendations"]
 
-    assert any("Investigate credit_score immediately" in item for item in recommendations)
+    assert any(
+        "Investigate credit_score immediately" in item for item in recommendations
+    )
 
 
 @pytest.mark.asyncio
@@ -159,7 +163,10 @@ async def test_recommendation_output_shift_flagged(db_session: AsyncSession) -> 
     report = await generate_report(db_session, model.id, week_start, week_end)
     recommendations = report.report_json["recommendations"]
 
-    assert any("Output distribution has significantly shifted" in item for item in recommendations)
+    assert any(
+        "Output distribution has significantly shifted" in item
+        for item in recommendations
+    )
 
 
 @pytest.mark.asyncio
@@ -230,7 +237,9 @@ async def test_generate_report_stores_to_db(db_session: AsyncSession) -> None:
 
     report = await generate_report(db_session, model.id, week_start, week_end)
 
-    persisted = await db_session.execute(select(HealthReport).where(HealthReport.id == report.id))
+    persisted = await db_session.execute(
+        select(HealthReport).where(HealthReport.id == report.id)
+    )
     row = persisted.scalar_one_or_none()
 
     assert row is not None
@@ -254,7 +263,10 @@ async def test_generate_report_upsert(db_session: AsyncSession) -> None:
     first = await generate_report(db_session, model.id, week_start, week_end)
 
     # Add more severe drift and regenerate for same week_start.
-    await db_session.execute(text("DELETE FROM drift_scores WHERE model_id = :model_id"), {"model_id": str(model.id)})
+    await db_session.execute(
+        text("DELETE FROM drift_scores WHERE model_id = :model_id"),
+        {"model_id": str(model.id)},
+    )
     await db_session.commit()
     await _insert_week_drift(
         db_session,

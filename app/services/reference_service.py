@@ -22,7 +22,9 @@ from app.services.model_service import _compute_distribution_stats, _compute_his
 logger = logging.getLogger(__name__)
 
 
-async def register_reference(db: AsyncSession, payload: ReferencePayload) -> ReferenceResponse:
+async def register_reference(
+    db: AsyncSession, payload: ReferencePayload
+) -> ReferenceResponse:
     """Register or update reference distributions and optional feature importances."""
     features_registered: list[str] = []
 
@@ -100,7 +102,9 @@ async def register_reference(db: AsyncSession, payload: ReferencePayload) -> Ref
     )
 
 
-async def list_reference_features(db: AsyncSession, model_id: UUID) -> ReferenceListResponse:
+async def list_reference_features(
+    db: AsyncSession, model_id: UUID
+) -> ReferenceListResponse:
     """List registered reference features and stats for a model."""
     result = await db.execute(
         select(ReferenceDistribution)
@@ -110,7 +114,8 @@ async def list_reference_features(db: AsyncSession, model_id: UUID) -> Reference
     rows = result.scalars().all()
 
     items = [
-        RegisteredFeatureResponse(feature_name=row.feature_name, stats=row.stats) for row in rows
+        RegisteredFeatureResponse(feature_name=row.feature_name, stats=row.stats)
+        for row in rows
     ]
 
     return ReferenceListResponse(model_id=model_id, items=items, total=len(items))

@@ -21,7 +21,9 @@ async def create_model_endpoint(
         return await create_model(db=db, name=payload.name, version=payload.version)
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Model name already exists") from exc
+        raise HTTPException(
+            status_code=409, detail="Model name already exists"
+        ) from exc
 
 
 @router.get("", response_model=ModelListResponse)

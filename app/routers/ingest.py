@@ -20,7 +20,11 @@ from app.services.drift_engine import run_drift_analysis
 from app.services import importance_scorer
 from app.services.model_service import get_model
 from app.services.reference_service import list_reference_features, register_reference
-from app.services.snapshot_service import get_snapshot_window, ingest_snapshot, list_snapshot_dates
+from app.services.snapshot_service import (
+    get_snapshot_window,
+    ingest_snapshot,
+    list_snapshot_dates,
+)
 
 router = APIRouter(tags=["ingest"])
 model_importance_router = APIRouter(tags=["ingest"])
@@ -60,7 +64,9 @@ async def ingest_snapshot_endpoint(
 ) -> SnapshotResponse:
     """Ingest production snapshots and queue drift analysis asynchronously."""
     response = await ingest_snapshot(db=db, payload=payload)
-    background_tasks.add_task(run_drift_analysis, db, response.model_id, response.window_date)
+    background_tasks.add_task(
+        run_drift_analysis, db, response.model_id, response.window_date
+    )
     return response
 
 
@@ -77,7 +83,9 @@ async def list_snapshot_dates_endpoint(
     return await list_snapshot_dates(db=db, model_id=model_id)
 
 
-@router.get("/snapshots/{model_id}/{window_date}", response_model=list[SnapshotFeatureResponse])
+@router.get(
+    "/snapshots/{model_id}/{window_date}", response_model=list[SnapshotFeatureResponse]
+)
 async def get_snapshot_window_endpoint(
     model_id: UUID,
     window_date: date,
@@ -100,7 +108,9 @@ async def get_snapshot_window_endpoint(
     ]
 
 
-@model_importance_router.post("/models/{model_id}/importances", response_model=ImportanceUploadResponse)
+@model_importance_router.post(
+    "/models/{model_id}/importances", response_model=ImportanceUploadResponse
+)
 async def upload_model_importances_endpoint(
     model_id: UUID,
     payload: ImportanceUploadRequest,

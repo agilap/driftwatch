@@ -14,7 +14,9 @@ class Snapshot(Base):
     """Daily production feature snapshot distributions."""
 
     __tablename__ = "snapshots"
-    __table_args__ = (Index("ix_snapshots_model_id_window_date", "model_id", "window_date"),)
+    __table_args__ = (
+        Index("ix_snapshots_model_id_window_date", "model_id", "window_date"),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),

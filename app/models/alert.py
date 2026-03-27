@@ -16,7 +16,8 @@ class Alert(Base):
     __tablename__ = "alerts"
     __table_args__ = (
         CheckConstraint(
-            "alert_type IN ('drift_red','output_shift','data_gap')", name="ck_alerts_alert_type"
+            "alert_type IN ('drift_red','output_shift','data_gap')",
+            name="ck_alerts_alert_type",
         ),
     )
 
@@ -34,7 +35,9 @@ class Alert(Base):
     alert_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[str | None] = mapped_column(Text, nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

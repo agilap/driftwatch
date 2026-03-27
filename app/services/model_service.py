@@ -10,7 +10,9 @@ from app.models.model_registry import ModelRegistry
 from app.schemas.model import ModelListResponse, ModelResponse
 
 
-async def create_model(db: AsyncSession, name: str, version: str | None) -> ModelResponse:
+async def create_model(
+    db: AsyncSession, name: str, version: str | None
+) -> ModelResponse:
     """Create and persist a new model registry record."""
     model = ModelRegistry(name=name, version=version)
     db.add(model)
@@ -41,7 +43,9 @@ async def list_models(db: AsyncSession, page: int, page_size: int) -> ModelListR
         .offset(offset)
         .limit(page_size)
     )
-    items = [ModelResponse.model_validate(item) for item in items_result.scalars().all()]
+    items = [
+        ModelResponse.model_validate(item) for item in items_result.scalars().all()
+    ]
 
     return ModelListResponse(items=items, total=total)
 
@@ -64,7 +68,9 @@ def _compute_distribution_stats(values: list[float]) -> dict[str, float]:
     }
 
 
-def _compute_histogram(values: list[float], bins: int = 10) -> dict[str, list[float] | list[int]]:
+def _compute_histogram(
+    values: list[float], bins: int = 10
+) -> dict[str, list[float] | list[int]]:
     """Compute histogram bins and counts for a numeric feature array."""
     if not values:
         msg = "Values list cannot be empty"

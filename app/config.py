@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     min_sample_warning: int = Field(30, alias="MIN_SAMPLE_WARNING")
 
     model_config = SettingsConfigDict(
-        env_file=".env.example",
+        env_file=(".env", ".env.example"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

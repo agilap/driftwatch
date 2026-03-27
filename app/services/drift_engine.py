@@ -399,18 +399,17 @@ async def run_drift_analysis(
             existing.computed_at = computed_at
 
         if severity == "red":
-            create_alert_fn = getattr(alert_service, "create_alert", None)
-            if create_alert_fn is not None:
-                await create_alert_fn(
-                    db=db,
-                    model_id=model_id,
-                    feature_name=feature_name,
-                    severity=severity,
-                    message=(
-                        f"Significant drift detected for feature {feature_name} "
-                        f"on {window_date.isoformat()}"
-                    ),
-                )
+            await alert_service.create_alert(
+                db=db,
+                model_id=model_id,
+                feature_name=feature_name,
+                alert_type="drift_red",
+                severity="red",
+                message=(
+                    f"Feature '{feature_name}' PSI={psi:.3f} exceeds RED threshold "
+                    f"on {window_date}"
+                ),
+            )
 
         severity_counts[severity] += 1
         results.append(

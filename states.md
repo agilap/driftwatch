@@ -79,10 +79,10 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Alert Layer
 | Task | Status | Notes |
 |---|---|---|
-| Alert creation on RED severity | ⏳ | Write to `alerts` table |
-| Webhook dispatch (configurable per model) | ⏳ | HTTP POST with drift payload |
-| `GET /alerts` — list active alerts | ⏳ | |
-| `PATCH /alerts/{id}/resolve` | ⏳ | |
+| Alert creation on RED severity | ✅ | Write to `alerts` table |
+| Webhook dispatch (configurable per model) | ✅ | HTTP POST with drift payload |
+| `GET /alerts` — list active alerts | ✅ | |
+| `PATCH /alerts/{id}/resolve` | ✅ | |
 
 ---
 
@@ -189,4 +189,9 @@ _None currently._
 - Tasks completed: KS test, PSI, JS divergence, chi-square, severity classification, drift score persistence, run_drift_analysis orchestration, drift score retrieval endpoints
 - Tests added: yes — 10 unit tests + 1 integration test in tests/test_drift_engine.py
 - Next session: Alert dispatch implementation and report endpoints based on stored drift summaries
+**[2026-03-27]** — Build alert layer for creation, webhook dispatch, and resolution APIs
+- Files changed: app/services/alert_service.py, app/schemas/alert.py, app/routers/alerts.py, app/services/drift_engine.py, app/main.py, tests/test_alert_service.py, states.md
+- Tasks completed: alert creation on red drift, webhook dispatch with failure isolation, unresolved/resolved alert listing, PATCH resolve endpoint
+- Tests added: yes — 8 tests in tests/test_alert_service.py
+- Next session: reports and scheduler integration using resolved/unresolved alert trends
 <!-- SESSION LOG END -->

@@ -23,7 +23,7 @@ app.include_router(models.router, prefix="/models")
 app.include_router(ingest.router, prefix="/ingest")
 app.include_router(drift.router, prefix="/drift")
 app.include_router(reports.router)
-app.include_router(alerts.router)
+app.include_router(alerts.router, prefix="/alerts")
 
 
 @app.get("/health")

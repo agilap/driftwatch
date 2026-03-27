@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 
-from app.routers import alerts, ingest, models, reports
+from app.routers import alerts, drift, ingest, models, reports
 
 logger = logging.getLogger("driftwatch")
 
@@ -21,6 +21,7 @@ app = FastAPI(title="DriftWatch", version="0.1.0", lifespan=lifespan)
 
 app.include_router(models.router, prefix="/models")
 app.include_router(ingest.router, prefix="/ingest")
+app.include_router(drift.router, prefix="/drift")
 app.include_router(reports.router)
 app.include_router(alerts.router)
 

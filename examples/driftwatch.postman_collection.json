@@ -1,0 +1,56 @@
+{
+  "info": {
+    "name": "DriftWatch API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Minimal collection for DriftWatch core endpoints"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Create Model",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"loan-scorer-v3\",\n  \"version\": \"v3\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/models",
+          "host": ["{{baseUrl}}"],
+          "path": ["models"]
+        }
+      }
+    },
+    {
+      "name": "Generate Report",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"week_start\": \"2026-08-10\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/reports/{{modelId}}/generate",
+          "host": ["{{baseUrl}}"],
+          "path": ["reports", "{{modelId}}", "generate"]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {"key": "baseUrl", "value": "http://localhost:8000"},
+    {"key": "modelId", "value": ""}
+  ]
+}

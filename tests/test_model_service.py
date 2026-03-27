@@ -56,7 +56,9 @@ async def db_session() -> AsyncSession:
 
 @pytest.mark.asyncio
 async def test_create_model_success(db_session: AsyncSession) -> None:
-    created = await create_model(db=db_session, name=f"loan-scorer-{uuid4()}", version="v1")
+    created = await create_model(
+        db=db_session, name=f"loan-scorer-{uuid4()}", version="v1"
+    )
 
     assert isinstance(created.id, UUID)
     assert created.name.startswith("loan-scorer-")

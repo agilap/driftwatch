@@ -101,7 +101,9 @@ async def test_register_reference_success(
 
     async with session_factory() as session:
         result = await session.execute(
-            select(ReferenceDistribution).where(ReferenceDistribution.model_id == model_id)
+            select(ReferenceDistribution).where(
+                ReferenceDistribution.model_id == model_id
+            )
         )
         rows = result.scalars().all()
 

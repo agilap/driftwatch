@@ -1,6 +1,6 @@
 # DriftWatch — Project States
 
-> Last updated: 2026-03-22
+> Last updated: 2026-03-27
 > Current phase: **I-2 · Week 1 — Foundation & Ingest API**
 
 ---
@@ -57,7 +57,7 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 | `POST /models` — register model | ✅ | |
 | `GET /models` — list models | ✅ | |
 | `POST /ingest/reference` — upload reference distribution | ✅ | Compute & store histogram + stats |
-| `POST /ingest/snapshot` — daily production batch | ⏳ | Validate → compute stats → store |
+| `POST /ingest/snapshot` — daily production batch | ✅ | Validate → compute stats → store |
 | `GET /health` — liveness probe | ⏳ | |
 | Pydantic schemas for all payloads | ⏳ | |
 
@@ -74,7 +74,7 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 | Chi-square test for categorical features | ⏳ | `scipy.stats.chisquare` |
 | Severity classifier (green/yellow/red) | ⏳ | Based on PSI thresholds |
 | Persist results → `drift_scores` table | ⏳ | |
-| Trigger drift engine on snapshot ingest | ⏳ | Background task via FastAPI |
+| Trigger drift engine on snapshot ingest | 🔄 | Background task via FastAPI (stub wired) |
 
 ### Alert Layer
 | Task | Status | Notes |
@@ -179,4 +179,9 @@ _None currently._
 - Tasks completed: POST /models — register model; GET /models — list models; POST /ingest/reference — upload reference distribution
 - Tests added: yes — 9 tests across tests/test_model_service.py and tests/test_ingest_reference.py
 - Next session: POST /ingest/snapshot endpoint and drift trigger pipeline
+**[2026-03-27]** — Build production snapshot ingest endpoint with background drift trigger wiring
+- Files changed: app/schemas/ingest.py, app/services/snapshot_service.py, app/services/drift_engine.py, app/routers/ingest.py, tests/test_ingest_snapshot.py, states.md
+- Tasks completed: POST /ingest/snapshot — daily production batch; GET /ingest/snapshots/{model_id}; GET /ingest/snapshots/{model_id}/{window_date}; snapshot upsert and predictions ingestion (__predictions__)
+- Tests added: yes — 6 tests in tests/test_ingest_snapshot.py
+- Next session: Implement full drift analysis logic inside run_drift_analysis stub and persist drift_scores/alerts
 <!-- SESSION LOG END -->

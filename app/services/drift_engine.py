@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.drift_score import DriftScore
-from app.models.feature_importance import FeatureImportance
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services import alert_service
+from app.services import importance_scorer
 
 logger = logging.getLogger(__name__)
 
@@ -334,12 +334,11 @@ async def run_drift_analysis(
     snapshot_by_feature = {row.feature_name: row for row in snapshot_rows}
     shared_features = sorted(set(reference_by_feature).intersection(snapshot_by_feature))
 
-    importance_result = await db.execute(
-        select(FeatureImportance).where(FeatureImportance.model_id == model_id)
-    )
-    importance_rows = list(importance_result.scalars().all())
-    importance_map = {row.feature_name: float(row.importance) for row in importance_rows}
-    feature_weights = _resolve_feature_weights(shared_features, importance_map)
+    raw_importances = await importance_scorer.load_importances(db=db, model_id=model_id)
+    if raw_importances:
+        feature_weights = importance_scorer.normalise_importances(raw_importances)
+    else:
+        feature_weights = importance_scorer.equal_weight_importances(shared_features)
 
     computed_at = datetime.now(timezone.utc)
     results: list[DriftScoreResult] = []
@@ -363,7 +362,11 @@ async def run_drift_analysis(
         psi = compute_psi(reference_samples, snapshot_samples)
         js_divergence = compute_js_divergence(reference_samples, snapshot_samples)
         severity = classify_severity(psi)
-        weighted_score = float(np.clip(psi, 0.0, 1.0) * feature_weights.get(feature_name, 0.0))
+        psi_normalised = float(np.clip(psi, 0.0, 1.0))
+        weighted_score = importance_scorer.compute_weighted_score(
+            drift_magnitude=psi_normalised,
+            feature_importance=feature_weights.get(feature_name, 0.0),
+        )
 
         existing_result = await db.execute(
             select(DriftScore).where(

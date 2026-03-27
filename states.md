@@ -91,11 +91,11 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Drift Importance Scorer
 | Task | Status | Notes |
 |---|---|---|
-| Accept feature importances at model registration | ⏳ | JSON upload, SHAP, or coefficient array |
-| Normalise importances (sum to 1) | ⏳ | |
-| `weighted_score = drift_magnitude × feature_importance` | ⏳ | See `architecture.md §2.3` |
-| Re-rank drift alerts by weighted score | ⏳ | |
-| Store weighted scores in `drift_scores` | ⏳ | |
+| Accept feature importances at model registration | ✅ | JSON upload, SHAP, or coefficient array |
+| Normalise importances (sum to 1) | ✅ | |
+| `weighted_score = drift_magnitude × feature_importance` | ✅ | See `architecture.md §2.3` |
+| Re-rank drift alerts by weighted score | ✅ | |
+| Store weighted scores in `drift_scores` | ✅ | |
 
 ### Weekly Health Report Generator
 | Task | Status | Notes |
@@ -194,4 +194,9 @@ _None currently._
 - Tasks completed: alert creation on red drift, webhook dispatch with failure isolation, unresolved/resolved alert listing, PATCH resolve endpoint
 - Tests added: yes — 8 tests in tests/test_alert_service.py
 - Next session: reports and scheduler integration using resolved/unresolved alert trends
+**[2026-03-27]** — Build ML drift importance scorer service and weighted ranking flow
+- Files changed: app/services/importance_scorer.py, app/services/drift_engine.py, app/services/reference_service.py, app/schemas/ingest.py, app/routers/ingest.py, app/main.py, tests/test_importance_scorer.py, states.md
+- Tasks completed: standalone importance scorer utilities, model importances upload endpoint, normalized/equal-weight fallback integration in drift engine, weighted feature ranking support
+- Tests added: yes — 10 tests in tests/test_importance_scorer.py
+- Next session: weekly report ranking and importance-aware summary sections
 <!-- SESSION LOG END -->

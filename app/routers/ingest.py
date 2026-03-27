@@ -6,19 +6,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.ingest import (
+    ImportanceUploadRequest,
+    ImportanceUploadResponse,
     ReferenceListResponse,
     ReferencePayload,
     ReferenceResponse,
     SnapshotFeatureResponse,
     SnapshotPayload,
     SnapshotResponse,
+    StoredImportanceResponse,
 )
 from app.services.drift_engine import run_drift_analysis
+from app.services import importance_scorer
 from app.services.model_service import get_model
 from app.services.reference_service import list_reference_features, register_reference
 from app.services.snapshot_service import get_snapshot_window, ingest_snapshot, list_snapshot_dates
 
 router = APIRouter(tags=["ingest"])
+model_importance_router = APIRouter(tags=["ingest"])
 
 
 @router.post("/reference", response_model=ReferenceResponse)
@@ -93,3 +98,40 @@ async def get_snapshot_window_endpoint(
         )
         for row in rows
     ]
+
+
+@model_importance_router.post("/models/{model_id}/importances", response_model=ImportanceUploadResponse)
+async def upload_model_importances_endpoint(
+    model_id: UUID,
+    payload: ImportanceUploadRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ImportanceUploadResponse:
+    """Upload and upsert model feature importances."""
+    model = await get_model(db=db, model_id=model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    try:
+        normalized = importance_scorer.import_from_json(
+            json_data=payload.importances,
+            method=payload.method,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    rows = await importance_scorer.upsert_importances(
+        db=db,
+        model_id=model_id,
+        importances=normalized,
+        method=payload.method,
+    )
+
+    items = [
+        StoredImportanceResponse(
+            feature_name=row.feature_name,
+            importance=row.importance,
+            method=row.method,
+        )
+        for row in rows
+    ]
+    return ImportanceUploadResponse(model_id=model_id, items=items, total=len(items))

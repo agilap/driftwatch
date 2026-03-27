@@ -67,7 +67,9 @@ async def ingest_snapshot_context() -> (
     await engine.dispose()
 
 
-async def _create_model(client: AsyncClient, name: str = "loan-scorer", version: str = "v1") -> UUID:
+async def _create_model(
+    client: AsyncClient, name: str = "loan-scorer", version: str = "v1"
+) -> UUID:
     response = await client.post("/models", json={"name": name, "version": version})
     assert response.status_code == 201
     return UUID(response.json()["id"])

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncGenerator
-from datetime import date
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -55,7 +54,9 @@ async def edge_context() -> AsyncGenerator[AsyncClient, None]:
 @pytest.mark.asyncio
 async def test_empty_features_dict_rejected(edge_context: AsyncClient) -> None:
     client = edge_context
-    model_response = await client.post("/models", json={"name": f"edge-model-{uuid4()}", "version": "v1"})
+    model_response = await client.post(
+        "/models", json={"name": f"edge-model-{uuid4()}", "version": "v1"}
+    )
     model_id = model_response.json()["id"]
 
     response = await client.post(
@@ -77,22 +78,34 @@ async def test_model_not_found_all_endpoints(edge_context: AsyncClient) -> None:
 
     checks = [
         ("get", f"/models/{missing_model_id}", None),
-        ("post", "/ingest/reference", {
-            "model_id": missing_model_id,
-            "features": {"income": [1.0, 2.0, 3.0]},
-        }),
-        ("post", "/ingest/snapshot", {
-            "model_id": missing_model_id,
-            "timestamp": "2026-03-27T00:00:00Z",
-            "features": {"income": [1.0, 2.0, 3.0]},
-        }),
+        (
+            "post",
+            "/ingest/reference",
+            {
+                "model_id": missing_model_id,
+                "features": {"income": [1.0, 2.0, 3.0]},
+            },
+        ),
+        (
+            "post",
+            "/ingest/snapshot",
+            {
+                "model_id": missing_model_id,
+                "timestamp": "2026-03-27T00:00:00Z",
+                "features": {"income": [1.0, 2.0, 3.0]},
+            },
+        ),
         ("get", f"/ingest/snapshots/{missing_model_id}", None),
         ("get", f"/ingest/snapshots/{missing_model_id}/2026-03-27", None),
         ("get", f"/drift/{missing_model_id}/2026-03-27", None),
-        ("post", f"/models/{missing_model_id}/importances", {
-            "importances": {"income": 1.0},
-            "method": "manual",
-        }),
+        (
+            "post",
+            f"/models/{missing_model_id}/importances",
+            {
+                "importances": {"income": 1.0},
+                "method": "manual",
+            },
+        ),
         ("get", f"/reports/{missing_model_id}", None),
         ("get", f"/reports/{missing_model_id}/latest", None),
         ("get", f"/reports/{missing_model_id}/2026-03-24", None),

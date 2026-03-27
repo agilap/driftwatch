@@ -64,7 +64,11 @@ def test_rank_features_sorted_descending() -> None:
     )
 
     assert [item["rank"] for item in ranked] == [1, 2, 3]
-    assert ranked[0]["weighted_score"] >= ranked[1]["weighted_score"] >= ranked[2]["weighted_score"]
+    assert (
+        ranked[0]["weighted_score"]
+        >= ranked[1]["weighted_score"]
+        >= ranked[2]["weighted_score"]
+    )
     assert ranked[0]["feature_name"] == "income"
 
 

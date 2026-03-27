@@ -68,13 +68,13 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Statistical Tests
 | Task | Status | Notes |
 |---|---|---|
-| KS test per feature (`scipy.stats.ks_2samp`) | ⏳ | Compare snapshot vs reference samples |
-| PSI computation per feature | ⏳ | 10-bin histogram, thresholds: <0.10 green, 0.10–0.20 yellow, >0.20 red |
-| Jensen-Shannon divergence per feature | ⏳ | `scipy.spatial.distance.jensenshannon` |
-| Chi-square test for categorical features | ⏳ | `scipy.stats.chisquare` |
-| Severity classifier (green/yellow/red) | ⏳ | Based on PSI thresholds |
-| Persist results → `drift_scores` table | ⏳ | |
-| Trigger drift engine on snapshot ingest | 🔄 | Background task via FastAPI (stub wired) |
+| KS test per feature (`scipy.stats.ks_2samp`) | ✅ | Compare snapshot vs reference samples |
+| PSI computation per feature | ✅ | 10-bin histogram, thresholds: <0.10 green, 0.10–0.20 yellow, >0.20 red |
+| Jensen-Shannon divergence per feature | ✅ | `scipy.spatial.distance.jensenshannon` |
+| Chi-square test for categorical features | ✅ | `scipy.stats.chisquare` |
+| Severity classifier (green/yellow/red) | ✅ | Based on PSI thresholds |
+| Persist results → `drift_scores` table | ✅ | |
+| Trigger drift engine on snapshot ingest | ✅ | Full run_drift_analysis implementation |
 
 ### Alert Layer
 | Task | Status | Notes |
@@ -184,4 +184,9 @@ _None currently._
 - Tasks completed: POST /ingest/snapshot — daily production batch; GET /ingest/snapshots/{model_id}; GET /ingest/snapshots/{model_id}/{window_date}; snapshot upsert and predictions ingestion (__predictions__)
 - Tests added: yes — 6 tests in tests/test_ingest_snapshot.py
 - Next session: Implement full drift analysis logic inside run_drift_analysis stub and persist drift_scores/alerts
+**[2026-03-27]** — Implement drift engine core statistical tests and persistence flow
+- Files changed: app/services/drift_engine.py, app/schemas/drift.py, app/routers/drift.py, app/main.py, tests/test_drift_engine.py, states.md
+- Tasks completed: KS test, PSI, JS divergence, chi-square, severity classification, drift score persistence, run_drift_analysis orchestration, drift score retrieval endpoints
+- Tests added: yes — 10 unit tests + 1 integration test in tests/test_drift_engine.py
+- Next session: Alert dispatch implementation and report endpoints based on stored drift summaries
 <!-- SESSION LOG END -->

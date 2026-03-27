@@ -74,3 +74,26 @@ class SnapshotFeatureResponse(BaseModel):
     stats: dict[str, float]
     distribution: dict[str, list[float] | list[int]]
     sample_count: int | None
+
+
+class ImportanceUploadRequest(BaseModel):
+    """Payload for uploading feature importances for a model."""
+
+    importances: dict[str, float]
+    method: Literal["shap", "coefficient", "manual"]
+
+
+class StoredImportanceResponse(BaseModel):
+    """Serialized stored feature importance."""
+
+    feature_name: str
+    importance: float
+    method: str | None
+
+
+class ImportanceUploadResponse(BaseModel):
+    """Response for feature importance upload requests."""
+
+    model_id: UUID
+    items: list[StoredImportanceResponse]
+    total: int

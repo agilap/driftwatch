@@ -16,22 +16,10 @@ from app.schemas.ingest import (
     ReferenceResponse,
     RegisteredFeatureResponse,
 )
+from app.services import importance_scorer
 from app.services.model_service import _compute_distribution_stats, _compute_histogram
 
 logger = logging.getLogger(__name__)
-
-
-def _normalise_importances(importances: dict[str, float]) -> dict[str, float]:
-    """Normalize feature importances to sum to 1.0."""
-    if not importances:
-        return {}
-
-    total = float(sum(importances.values()))
-    if total <= 0:
-        equal_weight = 1.0 / len(importances)
-        return {feature: equal_weight for feature in importances}
-
-    return {feature: value / total for feature, value in importances.items()}
 
 
 async def register_reference(db: AsyncSession, payload: ReferencePayload) -> ReferenceResponse:
@@ -75,7 +63,10 @@ async def register_reference(db: AsyncSession, payload: ReferencePayload) -> Ref
 
     importances_registered = bool(payload.feature_importances)
     if payload.feature_importances:
-        normalised = _normalise_importances(payload.feature_importances)
+        normalised = importance_scorer.import_from_json(
+            json_data=payload.feature_importances,
+            method=payload.importance_method or "manual",
+        )
 
         for feature_name, importance in normalised.items():
             existing_result = await db.execute(

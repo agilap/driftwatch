@@ -100,19 +100,19 @@ Week 4  ──▶  Polish, Testing, Docker, Demo
 ### Weekly Health Report Generator
 | Task | Status | Notes |
 |---|---|---|
-| APScheduler setup — Monday 00:00 UTC | ⏳ | |
-| Aggregate 7-day drift scores per model | ⏳ | |
-| Compute overall health score (0–100) | ⏳ | Inverse of mean weighted drift |
-| Per-feature drift summary table | ⏳ | |
-| Prediction distribution histogram comparison | ⏳ | |
-| Correlation: feature drift ↔ output shift | ⏳ | Pearson/Spearman |
-| Top drifted features list (ranked) | ⏳ | |
-| Recommendations engine (rule-based) | ⏳ | Retraining flag if score < 60 |
-| Markdown report output | ⏳ | |
-| JSON report output | ⏳ | |
-| Store → `health_reports` table | ⏳ | |
-| `GET /reports/{model_id}` — list reports | ⏳ | |
-| `GET /reports/{model_id}/{week}` — fetch specific | ⏳ | |
+| APScheduler setup — Monday 00:00 UTC | ✅ | |
+| Aggregate 7-day drift scores per model | ✅ | |
+| Compute overall health score (0–100) | ✅ | Inverse of mean weighted drift |
+| Per-feature drift summary table | ✅ | |
+| Prediction distribution histogram comparison | ✅ | |
+| Correlation: feature drift ↔ output shift | ✅ | Pearson/Spearman |
+| Top drifted features list (ranked) | ✅ | |
+| Recommendations engine (rule-based) | ✅ | Retraining flag if score < 60 |
+| Markdown report output | ✅ | |
+| JSON report output | ✅ | |
+| Store → `health_reports` table | ✅ | |
+| `GET /reports/{model_id}` — list reports | ✅ | |
+| `GET /reports/{model_id}/{week}` — fetch specific | ✅ | |
 
 ---
 
@@ -199,4 +199,9 @@ _None currently._
 - Tasks completed: standalone importance scorer utilities, model importances upload endpoint, normalized/equal-weight fallback integration in drift engine, weighted feature ranking support
 - Tests added: yes — 10 tests in tests/test_importance_scorer.py
 - Next session: weekly report ranking and importance-aware summary sections
+**[2026-03-27]** — Build weekly health report generator with scheduler and report endpoints
+- Files changed: app/services/report_generator.py, scheduler/weekly_report.py, app/schemas/report.py, app/routers/reports.py, app/main.py, tests/test_report_generator.py, states.md
+- Tasks completed: weekly aggregation, overall health scoring, feature ranking, output shift analysis, recommendations, markdown/json rendering, report persistence upsert, manual report generation API, weekly scheduler registration
+- Tests added: yes — 10 tests in tests/test_report_generator.py
+- Next session: endpoint-level integration tests for /reports APIs and CI scheduler smoke validation
 <!-- SESSION LOG END -->

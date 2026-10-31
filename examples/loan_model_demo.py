@@ -28,7 +28,9 @@ def _generate_january_reference(seed: int = 7) -> dict[str, list[float]]:
     }
 
 
-def _generate_january_snapshot(reference: dict[str, list[float]]) -> dict[str, list[float]]:
+def _generate_january_snapshot(
+    reference: dict[str, list[float]],
+) -> dict[str, list[float]]:
     """Create a no-drift January snapshot by sampling directly from reference values."""
     return {feature: values[:300] for feature, values in reference.items()}
 

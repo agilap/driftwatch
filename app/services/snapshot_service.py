@@ -4,15 +4,18 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import distinct, select
+from sqlalchemy import delete, distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.drift_score import DriftScore
+from app.models.health_report import HealthReport
 from app.models.snapshot import Snapshot
+from app.models.model_registry import ModelRegistry
+from app.models.reference_distribution import ReferenceDistribution
 from app.schemas.ingest import SnapshotPayload, SnapshotResponse
 from app.services.model_service import (
     _compute_distribution_stats,
     _compute_histogram,
-    get_model,
 )
 
 PREDICTIONS_FEATURE_NAME = "__predictions__"
@@ -22,13 +25,41 @@ async def ingest_snapshot(
     db: AsyncSession, payload: SnapshotPayload
 ) -> SnapshotResponse:
     """Ingest daily production feature distributions for a model."""
-    model = await get_model(db=db, model_id=payload.model_id)
+    model = (
+        await db.execute(
+            select(ModelRegistry)
+            .where(ModelRegistry.id == payload.model_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
+
+    reference_names = set(
+        (
+            await db.execute(
+                select(ReferenceDistribution.feature_name).where(
+                    ReferenceDistribution.model_id == payload.model_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not reference_names:
+        raise HTTPException(
+            status_code=409, detail="Register a reference before snapshots"
+        )
+    unknown = set(payload.features) - reference_names
+    if unknown:
+        raise HTTPException(
+            status_code=422, detail=f"Features missing reference: {sorted(unknown)}"
+        )
 
     window_date = payload.timestamp.date()
     features_recorded: list[str] = []
     sample_count = 0
+    snapshot_changed = False
 
     feature_batches: dict[str, list[float]] = dict(payload.features)
     if payload.predictions is not None:
@@ -56,6 +87,7 @@ async def ingest_snapshot(
         existing = existing_result.scalar_one_or_none()
 
         if existing is None:
+            snapshot_changed = True
             db.add(
                 Snapshot(
                     model_id=payload.model_id,
@@ -67,12 +99,31 @@ async def ingest_snapshot(
                 )
             )
         else:
+            snapshot_changed |= (
+                existing.distribution != histogram or existing.stats != stats
+            )
             existing.distribution = histogram
             existing.stats = stats
             existing.sample_count = len(values)
 
         features_recorded.append(feature_name)
 
+    if snapshot_changed:
+        # Commit new samples and invalidate their derived evidence atomically.
+        # Historical alerts remain audit records even while analysis is pending.
+        await db.execute(
+            delete(DriftScore).where(
+                DriftScore.model_id == payload.model_id,
+                DriftScore.window_date == window_date,
+            )
+        )
+        await db.execute(
+            delete(HealthReport).where(
+                HealthReport.model_id == payload.model_id,
+                HealthReport.week_start <= window_date,
+                HealthReport.week_end >= window_date,
+            )
+        )
     await db.commit()
 
     return SnapshotResponse(

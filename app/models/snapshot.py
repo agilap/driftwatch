@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +24,12 @@ class Snapshot(Base):
 
     __tablename__ = "snapshots"
     __table_args__ = (
+        UniqueConstraint(
+            "model_id",
+            "window_date",
+            "feature_name",
+            name="uq_snapshot_model_window_feature",
+        ),
         Index("ix_snapshots_model_id_window_date", "model_id", "window_date"),
     )
 

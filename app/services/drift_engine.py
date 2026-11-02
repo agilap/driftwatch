@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 import numpy as np
+from fastapi import HTTPException
 from pydantic import BaseModel
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import chisquare, ks_2samp
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.drift_score import DriftScore
+from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services import alert_service
@@ -341,6 +343,13 @@ async def run_drift_analysis(
     Returns:
         List of computed drift score results for intersecting features.
     """
+    # Ingestion uses the same model lock, so analysis sees a complete batch.
+    model_result = await db.execute(
+        select(ModelRegistry).where(ModelRegistry.id == model_id).with_for_update()
+    )
+    if model_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+
     ref_result = await db.execute(
         select(ReferenceDistribution).where(ReferenceDistribution.model_id == model_id)
     )
@@ -352,6 +361,11 @@ async def run_drift_analysis(
         )
     )
     snapshot_rows = list(snap_result.scalars().all())
+
+    if not reference_rows:
+        raise HTTPException(status_code=409, detail="Reference distribution required")
+    if not snapshot_rows:
+        raise HTTPException(status_code=404, detail="Snapshot window not found")
 
     reference_by_feature = {row.feature_name: row for row in reference_rows}
     snapshot_by_feature = {row.feature_name: row for row in snapshot_rows}
@@ -368,6 +382,7 @@ async def run_drift_analysis(
     computed_at = datetime.now(timezone.utc)
     results: list[DriftScoreResult] = []
     severity_counts = {"red": 0, "yellow": 0, "green": 0}
+    new_alerts = []
 
     for feature_name in shared_features:
         reference_samples = _reconstruct_samples_from_histogram(
@@ -427,17 +442,22 @@ async def run_drift_analysis(
             existing.computed_at = computed_at
 
         if severity == "red":
-            await alert_service.create_alert(
+            alert = await alert_service.create_alert(
                 db=db,
                 model_id=model_id,
                 feature_name=feature_name,
                 alert_type="drift_red",
                 severity="red",
+                window_date=window_date,
+                commit=False,
                 message=(
                     f"Feature '{feature_name}' PSI={psi:.3f} exceeds RED threshold "
                     f"on {window_date}"
                 ),
             )
+
+            if getattr(alert, "_dispatch_pending", False):
+                new_alerts.append(alert)
 
         severity_counts[severity] += 1
         results.append(
@@ -456,6 +476,10 @@ async def run_drift_analysis(
         )
 
     await db.commit()
+    for alert in new_alerts:
+        await db.refresh(alert)
+        await alert_service._dispatch_alert(alert)
+        alert._dispatch_pending = False
 
     logger.info(
         "Drift analysis complete for model=%s window=%s features=%d red=%d yellow=%d green=%d",

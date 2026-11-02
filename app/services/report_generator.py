@@ -175,7 +175,7 @@ async def generate_report(
             Persisted health report row.
     """
     model_result = await db.execute(
-        select(ModelRegistry).where(ModelRegistry.id == model_id)
+        select(ModelRegistry).where(ModelRegistry.id == model_id).with_for_update()
     )
     model = model_result.scalar_one_or_none()
     model_name = model.name if model is not None else str(model_id)

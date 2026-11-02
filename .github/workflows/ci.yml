@@ -55,7 +55,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: pip install -r requirements-demo.txt -r requirements-mcp.txt
+        run: pip install -r requirements-demo.txt -r requirements-agent.txt
       - name: Pytest
         run: pytest tests/ -v --cov=app --cov-report=term-missing
 
@@ -83,10 +83,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install demo dependencies
-        run: pip install -r requirements-demo.txt
+      - name: Install demo and agent dependencies
+        run: pip install -r requirements-demo.txt -r requirements-agent.txt
       - name: Run demo
         run: python -m examples.loan_risk_demo.run_demo
+      - name: Run model health agent
+        run: |
+          MODEL_ID=$(curl -sf http://localhost:8000/models | python -c 'import json, sys; from examples.loan_risk_demo.config import MODEL_NAME; print(next(m["id"] for m in json.load(sys.stdin)["items"] if m["name"] == MODEL_NAME))')
+          env -u DRIFTWATCH_LLM_BASE_URL -u DRIFTWATCH_LLM_MODEL -u DRIFTWATCH_LLM_API_KEY python -m model_health_agent "$MODEL_ID"
+          env -u DRIFTWATCH_LLM_BASE_URL -u DRIFTWATCH_LLM_MODEL -u DRIFTWATCH_LLM_API_KEY python -m model_health_agent "$MODEL_ID" --json
       - name: Teardown
         if: always()
         run: docker compose down -v

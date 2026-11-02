@@ -703,6 +703,30 @@ async def test_demo_lifecycle_statistics_and_state(
         assert str(day_b) in alert.message
 
 
+@pytest.mark.asyncio
+async def test_demo_snapshot_response(integration_context, tmp_path, monkeypatch):
+    from examples.loan_risk_demo.config import SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, _, _, _ = await _demo_lifecycle(
+        client, session_factory, tmp_path, monkeypatch
+    )
+    window = SCENARIOS["A"][2]
+    response = await client.get(f"/ingest/snapshots/{model_id}/{window}")
+    assert response.status_code == 200
+    features = response.json()
+    assert features
+    for feature in features:
+        assert feature["stats"]
+        distribution = feature["distribution"]
+        assert (
+            distribution["underflow"]
+            + sum(distribution["counts"])
+            + distribution["overflow"]
+            == feature["sample_count"]
+        )
+
+
 async def _demo_state(session_factory):
     from app.models.health_report import HealthReport
     from app.models.reference_distribution import ReferenceDistribution
@@ -957,3 +981,55 @@ async def test_mcp_tools_return_real_monitoring_results(
         )
         assert set(analysis["stable_features"]) == set(FEATURES[3:])
         assert len(analysis["active_alerts"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_model_health_agent_reports_real_demo_evidence(
+    integration_context, tmp_path, monkeypatch
+):
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from driftwatch_mcp.server import build_server
+    from examples.loan_risk_demo.config import FEATURES, SCENARIOS
+    from model_health_agent.graph import build_graph
+
+    client, session_factory = integration_context
+    model_id, *_ = await _demo_lifecycle(client, session_factory, tmp_path, monkeypatch)
+    shifted_day = date.fromisoformat(SCENARIOS["B"][2])
+    async with session_factory() as session:
+        stored = {
+            r.feature_name: r
+            for r in (
+                await session.scalars(
+                    select(DriftScore).where(
+                        DriftScore.model_id == model_id,
+                        DriftScore.window_date == shifted_day,
+                    )
+                )
+            ).all()
+        }
+    server = build_server(client)
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as mcp_session:
+        graph = build_graph(mcp_session)
+        report = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
+        second = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
+
+    assert report == second
+    assert report["status"] == "critical"
+    assert report["mode"] == "offline"
+    findings = report["findings"]
+    expected = sorted(
+        FEATURES[:3], key=lambda n: stored[n].weighted_score, reverse=True
+    )
+    assert [
+        f["feature_name"] for f in findings if f["feature_name"] != "__predictions__"
+    ] == expected
+    for finding in findings:
+        assert finding["drift"]["psi"] == stored[finding["feature_name"]].psi
+    directions = {f["feature_name"]: f["direction"] for f in findings}
+    assert directions["credit_score"] == "below"
+    assert directions["annual_income"] == "below"
+    assert directions["debt_to_income"] == "above"
+    assert set(report["stable_features"]) == set(FEATURES[3:])

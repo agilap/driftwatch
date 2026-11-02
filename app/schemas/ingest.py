@@ -133,7 +133,7 @@ class SnapshotFeatureResponse(BaseModel):
 
     feature_name: str
     stats: dict[str, float]
-    distribution: dict[str, list[float] | list[int]]
+    distribution: dict[str, list[float] | list[int] | int]
     sample_count: int | None
 
 

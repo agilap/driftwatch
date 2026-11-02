@@ -27,3 +27,20 @@ async def async_client(test_db_override: None) -> AsyncGenerator[AsyncClient, No
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def background_session_factory(monkeypatch):
+    """Keep background workers on a test-owned engine and event loop."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.config import settings
+
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("app.routers.ingest.AsyncSessionLocal", factory)
+    try:
+        yield
+    finally:
+        await engine.dispose()

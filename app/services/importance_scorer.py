@@ -6,7 +6,9 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.feature_importance import FeatureImportance
+from app.models.model_registry import ModelRegistry
 
 ALLOWED_METHODS = {"shap", "coefficient", "manual"}
 
@@ -45,12 +47,12 @@ def normalise_importances(importances: dict[str, float]) -> dict[str, float]:
     if not importances:
         return {}
 
-    if any(value < 0 for value in importances.values()):
-        msg = "importance values must be non-negative"
+    if any(not np.isfinite(value) or value < 0 for value in importances.values()):
+        msg = "importance values must be finite and non-negative"
         raise ValueError(msg)
 
     total = float(sum(importances.values()))
-    if total == 0:
+    if not np.isfinite(total) or total <= 0:
         msg = "at least one importance value must be greater than zero"
         raise ValueError(msg)
 
@@ -60,8 +62,8 @@ def normalise_importances(importances: dict[str, float]) -> dict[str, float]:
     # Adjust for floating-point residue to keep an exact 1.0 sum.
     residue = 1.0 - sum(normalized.values())
     if normalized:
-        first_key = next(iter(normalized))
-        normalized[first_key] = normalized[first_key] + residue
+        largest_key = max(normalized, key=normalized.get)
+        normalized[largest_key] = normalized[largest_key] + residue
     return normalized
 
 
@@ -80,6 +82,18 @@ def equal_weight_importances(feature_names: list[str]) -> dict[str, float]:
     return {feature_name: weight for feature_name in feature_names}
 
 
+def resolve_feature_weights(
+    feature_names: list[str], importances: dict[str, float]
+) -> dict[str, float]:
+    """Normalize importance over analyzed features, with equal-weight fallback."""
+    selected = {feature: importances.get(feature, 0.0) for feature in feature_names}
+    if any(not np.isfinite(value) or value < 0 for value in selected.values()):
+        raise ValueError("importance values must be finite and non-negative")
+    if not any(value > 0 for value in selected.values()):
+        return equal_weight_importances(feature_names)
+    return normalise_importances(selected)
+
+
 def compute_weighted_score(drift_magnitude: float, feature_importance: float) -> float:
     """Compute weighted drift score from drift magnitude and feature importance.
 
@@ -88,10 +102,17 @@ def compute_weighted_score(drift_magnitude: float, feature_importance: float) ->
             feature_importance: Normalized feature importance in [0, 1].
 
     Returns:
-            Weighted score in [0, 1], rounded to 6 decimal places.
+            Weighted score in [0, 1].
     """
+    if any(
+        not np.isfinite(value) or value < 0
+        for value in (drift_magnitude, feature_importance)
+    ):
+        raise ValueError(
+            "drift magnitude and importance must be finite and non-negative"
+        )
     weighted = float(drift_magnitude) * float(feature_importance)
-    return round(float(np.clip(weighted, 0.0, 1.0)), 6)
+    return float(np.clip(weighted, 0.0, 1.0))
 
 
 def rank_features_by_weighted_score(
@@ -112,20 +133,13 @@ def rank_features_by_weighted_score(
         return []
 
     feature_names = [str(row["feature_name"]) for row in drift_scores]
-    weights = (
-        normalise_importances(importances)
-        if importances
-        else equal_weight_importances(feature_names)
-    )
-
-    observed_psis = [max(0.0, float(row.get("psi", 0.0))) for row in drift_scores]
-    max_observed_psi = max(max(observed_psis), 1.0)
+    weights = resolve_feature_weights(feature_names, importances)
 
     ranked: list[dict] = []
     for row in drift_scores:
         feature_name = str(row["feature_name"])
         psi = max(0.0, float(row.get("psi", 0.0)))
-        psi_normalised = float(np.clip(psi / max_observed_psi, 0.0, 1.0))
+        psi_normalised = min(psi / settings.psi_red_threshold, 1.0)
         weighted_score = compute_weighted_score(
             psi_normalised, weights.get(feature_name, 0.0)
         )
@@ -168,7 +182,7 @@ def import_from_json(json_data: dict, method: str) -> dict[str, float]:
             msg = f"importance for feature '{feature_name}' must be numeric"
             raise ValueError(msg)
         numeric = float(value)
-        if numeric < 0:
+        if not np.isfinite(numeric) or numeric < 0:
             msg = f"importance for feature '{feature_name}' must be non-negative"
             raise ValueError(msg)
         parsed[str(feature_name)] = numeric
@@ -193,6 +207,9 @@ async def upsert_importances(
     Returns:
             List of persisted feature importance rows.
     """
+    await db.execute(
+        select(ModelRegistry.id).where(ModelRegistry.id == model_id).with_for_update()
+    )
     persisted: list[FeatureImportance] = []
     for feature_name, importance in importances.items():
         existing_result = await db.execute(

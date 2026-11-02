@@ -25,7 +25,7 @@ def _database_url() -> str:
     )
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def run_migrations() -> None:
     """Apply migrations for DB-backed service tests."""
     cfg = Config("alembic.ini")
@@ -34,7 +34,7 @@ def run_migrations() -> None:
 
 
 @pytest_asyncio.fixture
-async def db_session() -> AsyncSession:
+async def db_session(run_migrations: None) -> AsyncSession:
     """Provide isolated async DB session for each test."""
     engine = create_async_engine(_database_url(), future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -90,3 +90,48 @@ def test_compute_histogram_bin_count() -> None:
     assert len(histogram["bins"]) == 10
     assert len(histogram["bin_edges"]) == 11
     assert sum(histogram["counts"]) == 5
+
+
+def test_compute_histogram_preserves_outliers_and_endpoints() -> None:
+    histogram = _compute_histogram(
+        [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0],
+        bin_edges=[-2.0, 0.0, 2.0],
+    )
+
+    assert histogram["bin_edges"] == [-2.0, 0.0, 2.0]
+    assert histogram["counts"] == [2, 3]
+    assert histogram["underflow"] == 1
+    assert histogram["overflow"] == 1
+    assert (
+        sum(histogram["counts"]) + histogram["underflow"] + histogram["overflow"] == 7
+    )
+
+
+def test_compute_histogram_constant_reference_has_finite_edges() -> None:
+    histogram = _compute_histogram([-5.0] * 3)
+
+    assert histogram["underflow"] == 0
+    assert histogram["overflow"] == 0
+    assert sum(histogram["counts"]) == 3
+    assert all(-float("inf") < edge < float("inf") for edge in histogram["bin_edges"])
+
+
+@pytest.mark.parametrize("values", [[], [[1.0]], [float("nan")], [float("inf")]])
+@pytest.mark.parametrize("compute", [_compute_histogram, _compute_distribution_stats])
+def test_distribution_helpers_reject_invalid_values(values, compute) -> None:
+    with pytest.raises(ValueError):
+        compute(values)
+
+
+@pytest.mark.parametrize("bins", [0, -1, 1.5, True, "10"])
+def test_histogram_rejects_invalid_bin_counts(bins) -> None:
+    with pytest.raises(ValueError):
+        _compute_histogram([1.0], bins=bins)
+
+
+@pytest.mark.parametrize(
+    "edges", [[], [1.0], [0.0, 0.0], [1.0, 0.0], [[0.0, 1.0]], [0.0, float("inf")]]
+)
+def test_histogram_rejects_invalid_edges(edges) -> None:
+    with pytest.raises(ValueError):
+        _compute_histogram([1.0], bin_edges=edges)

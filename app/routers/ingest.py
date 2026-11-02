@@ -1,10 +1,12 @@
+import logging
+
 from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.schemas.ingest import (
     ImportanceUploadRequest,
     ImportanceUploadResponse,
@@ -25,6 +27,23 @@ from app.services.snapshot_service import (
     ingest_snapshot,
     list_snapshot_dates,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def analyze_snapshot_in_background(model_id: UUID, window_date: date) -> None:
+    """Own the session and rollback failed work; persisted snapshots remain retryable."""
+    async with AsyncSessionLocal() as db:
+        try:
+            await run_drift_analysis(db=db, model_id=model_id, window_date=window_date)
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "Drift analysis failed model_id=%s window_date=%s; retry via analyze endpoint",
+                model_id,
+                window_date,
+            )
+
 
 router = APIRouter(tags=["ingest"])
 model_importance_router = APIRouter(tags=["ingest"])
@@ -65,7 +84,7 @@ async def ingest_snapshot_endpoint(
     """Ingest production snapshots and queue drift analysis asynchronously."""
     response = await ingest_snapshot(db=db, payload=payload)
     background_tasks.add_task(
-        run_drift_analysis, db, response.model_id, response.window_date
+        analyze_snapshot_in_background, response.model_id, response.window_date
     )
     return response
 

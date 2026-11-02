@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 import httpx
@@ -23,6 +22,8 @@ async def create_alert(
     alert_type: str,
     severity: str,
     message: str,
+    window_date: date | None = None,
+    commit: bool = True,
 ) -> Alert:
     """Create an alert row and dispatch webhook asynchronously.
 
@@ -37,7 +38,21 @@ async def create_alert(
     Returns:
             Persisted alert ORM object.
     """
+    if window_date is not None:
+        existing = await db.execute(
+            select(Alert).where(
+                Alert.model_id == model_id,
+                Alert.feature_name == feature_name,
+                Alert.window_date == window_date,
+                Alert.alert_type == alert_type,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            return row
+
     alert = Alert(
+        window_date=window_date,
         model_id=model_id,
         feature_name=feature_name,
         alert_type=alert_type,
@@ -45,10 +60,12 @@ async def create_alert(
         message=message,
     )
     db.add(alert)
-    await db.commit()
-    await db.refresh(alert)
-
-    asyncio.create_task(_dispatch_alert(alert))
+    await db.flush()
+    alert._dispatch_pending = True
+    if commit:
+        await db.commit()
+        await db.refresh(alert)
+        await _dispatch_alert(alert)
     return alert
 
 

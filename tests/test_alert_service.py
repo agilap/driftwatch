@@ -115,7 +115,10 @@ async def test_create_alert_red_drift_triggers_on_red_severity(
             model_id=model_id,
             window_date=date(2026, 3, 27),
             feature_name="income",
-            distribution=_compute_histogram(production_values),
+            distribution=_compute_histogram(
+                production_values,
+                bin_edges=_compute_histogram(reference_values)["bin_edges"],
+            ),
             stats=_compute_distribution_stats(production_values),
             sample_count=len(production_values),
         )

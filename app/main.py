@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
+from app.database import check_database_readiness, engine
 from app.routers import alerts, drift, ingest, models, reports
 from scheduler.weekly_report import start_weekly_scheduler, stop_weekly_scheduler
 
@@ -23,13 +25,17 @@ logger = logging.getLogger("driftwatch")
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown lifecycle events."""
     logger.info("DriftWatch API starting up")
-    start_weekly_scheduler()
-    yield
-    stop_weekly_scheduler()
-    logger.info("DriftWatch API shutting down")
+    try:
+        await asyncio.wait_for(check_database_readiness(), timeout=5.0)
+        start_weekly_scheduler()
+        yield
+    finally:
+        stop_weekly_scheduler()
+        await engine.dispose()
+        logger.info("DriftWatch API shutting down")
 
 
-app = FastAPI(title="DriftWatch", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="DriftWatch", version="0.2.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -91,4 +97,15 @@ app.include_router(alerts.router, prefix="/alerts")
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Simple liveness endpoint used by local and CI smoke checks."""
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.2.0"}
+
+
+@app.get("/ready")
+async def readiness() -> JSONResponse:
+    """Check database connectivity and migration compatibility separately from liveness."""
+    try:
+        await asyncio.wait_for(check_database_readiness(), timeout=5.0)
+    except (SQLAlchemyError, OSError, RuntimeError, asyncio.TimeoutError):
+        logger.exception("Database readiness check failed")
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
+    return JSONResponse(content={"status": "ready"})

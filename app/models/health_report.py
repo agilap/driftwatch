@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Text, text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,6 +14,9 @@ class HealthReport(Base):
     """Weekly model health reports."""
 
     __tablename__ = "health_reports"
+    __table_args__ = (
+        UniqueConstraint("model_id", "week_start", name="uq_report_model_week"),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),

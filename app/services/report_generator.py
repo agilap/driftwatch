@@ -4,7 +4,6 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 import numpy as np
-from scipy.stats import pearsonr, spearmanr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,58 +13,20 @@ from app.models.model_registry import ModelRegistry
 from app.services import importance_scorer
 
 
-def compute_overall_health_score(weighted_scores: list[float]) -> float:
+def compute_overall_health_score(weighted_scores: list[float]) -> float | None:
     """Compute overall model health score from weighted drift scores.
 
     Args:
             weighted_scores: Weighted drift scores in [0, 1].
 
     Returns:
-            Overall health score in [0, 100].
+            Overall health score in [0, 100], or None when no evidence exists.
     """
     if not weighted_scores:
-        return 100.0
+        return None
 
-    score = 100.0 * (1.0 - float(np.mean(weighted_scores)))
-    return round(float(np.clip(score, 0.0, 100.0)), 3)
-
-
-def compute_correlation(
-    feature_drift: dict[str, float],
-    output_drift: float | None,
-) -> dict[str, float | int | None]:
-    """Compute feature-to-output drift correlations.
-
-    Args:
-            feature_drift: Mapping of feature name to drift magnitude (PSI).
-            output_drift: Output distribution shift metric, if available.
-
-    Returns:
-            Correlation summary with Pearson and Spearman values when available.
-    """
-    n_features = len(feature_drift)
-    if output_drift is None or n_features < 3:
-        return {"pearson_r": None, "spearman_r": None, "n_features": n_features}
-
-    x = np.asarray(list(feature_drift.values()), dtype=float)
-    y = np.full(shape=n_features, fill_value=float(output_drift), dtype=float)
-
-    pearson_r: float | None = None
-    spearman_r_value: float | None = None
-
-    pearson_raw = pearsonr(x, y).statistic
-    spearman_raw = spearmanr(x, y).statistic
-
-    if np.isfinite(pearson_raw):
-        pearson_r = float(pearson_raw)
-    if np.isfinite(spearman_raw):
-        spearman_r_value = float(spearman_raw)
-
-    return {
-        "pearson_r": pearson_r,
-        "spearman_r": spearman_r_value,
-        "n_features": n_features,
-    }
+    score = 100.0 * (1.0 - sum(weighted_scores))
+    return float(np.clip(score, 0.0, 100.0))
 
 
 def _status_band(score: float) -> str:
@@ -81,24 +42,27 @@ def _render_markdown_report(
     model_name: str,
     week_start: date,
     week_end: date,
-    overall_score: float,
+    overall_score: float | None,
     ranked_rows: list[dict],
     output_drift: float | None,
-    correlation: dict[str, float | int | None],
     recommendations: list[str],
     red_count: int,
     yellow_count: int,
     green_count: int,
 ) -> str:
     """Render report markdown from prepared report components."""
-    status = _status_band(overall_score)
+    health_summary = (
+        f"{overall_score:.1f}/100 ({_status_band(overall_score)})"
+        if overall_score is not None
+        else "No drift data available"
+    )
     feature_count = len(ranked_rows)
 
     lines: list[str] = [
         "# DriftWatch Weekly Health Report",
         f"Model: {model_name}",
         f"Period: {week_start.isoformat()} to {week_end.isoformat()}",
-        f"Overall Health Score: {overall_score}/100 ({status})",
+        f"Overall Health Score: {health_summary}",
         "",
         "## Executive Summary",
         (
@@ -108,16 +72,16 @@ def _render_markdown_report(
         (recommendations[0] if recommendations else "No immediate actions required."),
         "",
         "## Feature Drift Summary",
-        "| Feature | PSI | KS p-value | JS Divergence | Weighted Score | Severity |",
+        "| Feature | PSI | KS Statistic | JS Divergence | Weighted Score | Severity |",
         "|---|---:|---:|---:|---:|---|",
     ]
 
     for row in ranked_rows:
         lines.append(
-            "| {feature} | {psi:.3f} | {ks_p:.3f} | {js:.3f} | {weighted:.3f} | {severity} |".format(
+            "| {feature} | {psi:.3f} | {ks:.3f} | {js:.3f} | {weighted:.3f} | {severity} |".format(
                 feature=row["feature_name"],
                 psi=float(row.get("psi", 0.0)),
-                ks_p=float(row.get("ks_pvalue", 0.0)),
+                ks=float(row["ks_statistic"]),
                 js=float(row.get("js_divergence", 0.0)),
                 weighted=float(row.get("weighted_score", 0.0)),
                 severity=str(row.get("severity", "green")),
@@ -130,24 +94,13 @@ def _render_markdown_report(
     else:
         lines.append(f"Output drift PSI: {output_drift:.3f}")
 
-    lines.extend(["", "## Feature to Output Correlation"])
-    lines.append(
-        "Pearson r: {pearson}, Spearman r: {spearman}, features: {n}".format(
-            pearson=(
-                f"{float(correlation['pearson_r']):.3f}"
-                if correlation["pearson_r"] is not None
-                else "N/A"
-            ),
-            spearman=(
-                f"{float(correlation['spearman_r']):.3f}"
-                if correlation["spearman_r"] is not None
-                else "N/A"
-            ),
-            n=int(correlation["n_features"]),
-        )
+    lines.extend(
+        [
+            "",
+            "## Recommendations",
+            "Drift measures input and prediction distribution change; it does not establish performance degradation.",
+        ]
     )
-
-    lines.extend(["", "## Recommendations"])
     if recommendations:
         for recommendation in recommendations:
             lines.append(f"- {recommendation}")
@@ -175,7 +128,7 @@ async def generate_report(
             Persisted health report row.
     """
     model_result = await db.execute(
-        select(ModelRegistry).where(ModelRegistry.id == model_id)
+        select(ModelRegistry).where(ModelRegistry.id == model_id).with_for_update()
     )
     model = model_result.scalar_one_or_none()
     model_name = model.name if model is not None else str(model_id)
@@ -209,7 +162,8 @@ async def generate_report(
         {
             "feature_name": row.feature_name,
             "psi": float(row.psi or 0.0),
-            "ks_pvalue": float(row.ks_pvalue or 0.0),
+            "ks_statistic": row.ks_statistic,
+            "ks_pvalue": row.ks_pvalue,
             "js_divergence": float(row.js_divergence or 0.0),
             "severity": row.severity or "green",
         }
@@ -217,13 +171,6 @@ async def generate_report(
     ]
 
     importances = await importance_scorer.load_importances(db=db, model_id=model_id)
-    if not importances:
-        importances = importance_scorer.equal_weight_importances(
-            [row["feature_name"] for row in feature_dicts]
-        )
-    else:
-        importances = importance_scorer.normalise_importances(importances)
-
     ranked_features = importance_scorer.rank_features_by_weighted_score(
         drift_scores=feature_dicts,
         importances=importances,
@@ -232,18 +179,15 @@ async def generate_report(
     weighted_scores = [float(row["weighted_score"]) for row in ranked_features]
     overall_score = compute_overall_health_score(weighted_scores)
 
-    feature_drift = {row["feature_name"]: float(row["psi"]) for row in ranked_features}
-    correlation = compute_correlation(
-        feature_drift=feature_drift, output_drift=output_drift
-    )
-
     red_features = [row for row in ranked_features if row["severity"] == "red"]
     yellow_count = sum(1 for row in ranked_features if row["severity"] == "yellow")
     green_count = sum(1 for row in ranked_features if row["severity"] == "green")
 
     recommendations: list[str] = []
-    if overall_score < 60:
-        recommendations.append("Model retraining recommended")
+    if overall_score is not None and overall_score < 60:
+        recommendations.append(
+            "Evaluate model performance on recent labeled data before deciding to retrain"
+        )
     for row in red_features:
         recommendations.append(f"Investigate {row['feature_name']} immediately")
     if output_drift is not None and output_drift > 0.20:
@@ -267,7 +211,6 @@ async def generate_report(
             ),
         },
         "top_drifted_features": ranked_features[:5],
-        "feature_to_output_correlation": correlation,
         "recommendations": recommendations,
     }
 
@@ -278,7 +221,6 @@ async def generate_report(
         overall_score=overall_score,
         ranked_rows=ranked_features,
         output_drift=output_drift,
-        correlation=correlation,
         recommendations=recommendations,
         red_count=len(red_features),
         yellow_count=yellow_count,

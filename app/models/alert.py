@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, text
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +23,13 @@ class Alert(Base):
 
     __tablename__ = "alerts"
     __table_args__ = (
+        UniqueConstraint(
+            "model_id",
+            "feature_name",
+            "window_date",
+            "alert_type",
+            name="uq_alert_model_feature_window_type",
+        ),
         CheckConstraint(
             "alert_type IN ('drift_red','output_shift','data_gap')",
             name="ck_alerts_alert_type",
@@ -31,6 +46,7 @@ class Alert(Base):
         ForeignKey("models.id", ondelete="CASCADE"),
         nullable=False,
     )
+    window_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     feature_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     alert_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[str | None] = mapped_column(Text, nullable=True)

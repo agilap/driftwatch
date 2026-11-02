@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DriftScoreResponse(BaseModel):
@@ -14,7 +14,9 @@ class DriftScoreResponse(BaseModel):
     window_date: date
     feature_name: str
     ks_statistic: float | None
-    ks_pvalue: float | None
+    ks_pvalue: float | None = Field(
+        description="Null for histogram analysis: binned counts cannot provide a sample KS p-value."
+    )
     psi: float | None
     js_divergence: float | None
     weighted_score: float | None

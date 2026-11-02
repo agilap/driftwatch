@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncGenerator
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,7 +10,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import get_db
@@ -391,11 +391,12 @@ async def test_full_pipeline_generate_report(
     assert "feature_drift_summary" in report_json
     assert "output_distribution" in report_json
     assert "top_drifted_features" in report_json
-    assert "feature_to_output_correlation" in report_json
+    assert "feature_to_output_correlation" not in report_json
     assert "recommendations" in report_json
     assert report_json["top_drifted_features"][0]["feature_name"] == "income"
     assert any(
-        "retraining" in recommendation.lower() or "income" in recommendation.lower()
+        "deciding to retrain" in recommendation.lower()
+        or "income" in recommendation.lower()
         for recommendation in report_json["recommendations"]
     )
 
@@ -443,6 +444,7 @@ async def test_get_drift_scores_endpoint(
     assert response.status_code == 200
     items = response.json()
     assert len(items) == 3
+    assert all(item["ks_pvalue"] is None for item in items)
     assert all(item["severity"] in {"green", "yellow", "red"} for item in items)
 
 
@@ -489,3 +491,545 @@ async def test_idempotency_reingest_same_snapshot(
         drift_rows = drift_result.scalars().all()
 
     assert len(drift_rows) == 3
+
+
+@pytest.mark.asyncio
+async def test_legacy_snapshot_edges_return_conflict_until_reingested(
+    integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    from app.services.model_service import _compute_histogram
+
+    client, session_factory = integration_context
+    model_id = await _create_model(client, name=f"legacy-edges-{uuid4()}")
+    await _register_reference(client, model_id)
+    await _ingest_snapshot(client, model_id, AUGUST_TS, AUG_SNAPSHOT_FEATURES)
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(Snapshot).where(
+                    Snapshot.model_id == model_id,
+                    Snapshot.feature_name == "income",
+                )
+            )
+        ).scalar_one()
+        row.distribution = _compute_histogram(AUG_SNAPSHOT_FEATURES["income"])
+        await session.commit()
+
+    response = await client.post(f"/drift/{model_id}/{AUGUST_WINDOW_DATE}/analyze")
+    assert response.status_code == 409
+    assert "re-ingest" in response.json()["detail"]
+
+    await _ingest_snapshot(client, model_id, AUGUST_TS, AUG_SNAPSHOT_FEATURES)
+    response = await client.post(f"/drift/{model_id}/{AUGUST_WINDOW_DATE}/analyze")
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    assert all(row["ks_pvalue"] is None for row in response.json())
+
+
+async def _demo_lifecycle(client, session_factory, tmp_path, monkeypatch):
+    from app.routers import ingest
+    from examples.loan_risk_demo.config import (
+        BATCH_SIZE,
+        FEATURES,
+        REFERENCE_SEED,
+        REFERENCE_SIZE,
+        SCENARIOS,
+    )
+    from examples.loan_risk_demo.generate_data import feature_payload, generate_data
+    from examples.loan_risk_demo.train_model import train_model
+
+    monkeypatch.setattr(ingest, "AsyncSessionLocal", session_factory)
+    reference, labels = generate_data(REFERENCE_SIZE, REFERENCE_SEED)
+    model, _ = train_model(reference, labels, tmp_path / "model.joblib")
+    coefficients = abs(model.named_steps["logisticregression"].coef_[0])
+    model_id = await _create_model(client, f"demo-{uuid4()}")
+    reference_payload = {
+        "model_id": str(model_id),
+        "features": feature_payload(reference),
+        "predictions": model.predict_proba(reference)[:, 1].tolist(),
+        "feature_importances": dict(zip(FEATURES, coefficients.tolist())),
+        "importance_method": "coefficient",
+    }
+    assert (
+        await client.post("/ingest/reference", json=reference_payload)
+    ).status_code == 200
+    snapshots = {}
+    for scenario, (seed, shifted, window) in SCENARIOS.items():
+        batch, _ = generate_data(BATCH_SIZE, seed, shifted)
+        snapshots[scenario] = {
+            "model_id": str(model_id),
+            "timestamp": f"{window}T12:00:00Z",
+            "features": feature_payload(batch),
+            "predictions": model.predict_proba(batch)[:, 1].tolist(),
+        }
+        assert (
+            await client.post("/ingest/snapshot", json=snapshots[scenario])
+        ).status_code == 200
+        assert (
+            await client.post(
+                f"/reports/{model_id}/generate", json={"week_start": window}
+            )
+        ).status_code == 200
+    return model_id, reference_payload, snapshots, coefficients
+
+
+@pytest.mark.asyncio
+async def test_demo_lifecycle_statistics_and_state(
+    integration_context, tmp_path, monkeypatch
+):
+    import numpy as np
+
+    from app.config import settings
+    from app.models.reference_distribution import ReferenceDistribution
+    from app.services.drift_engine import (
+        classify_severity,
+        compute_binned_ks,
+        compute_js_divergence_from_counts,
+        compute_psi_from_counts,
+    )
+    from examples.loan_risk_demo.config import BATCH_SIZE, FEATURES, SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, _, _, coefficients = await _demo_lifecycle(
+        client, session_factory, tmp_path, monkeypatch
+    )
+    async with session_factory() as session:
+        references = {
+            r.feature_name: r
+            for r in (await session.scalars(select(ReferenceDistribution))).all()
+        }
+        snapshots = {
+            (r.window_date, r.feature_name): r
+            for r in (await session.scalars(select(Snapshot))).all()
+        }
+        scores = {
+            (r.window_date, r.feature_name): r
+            for r in (await session.scalars(select(DriftScore))).all()
+        }
+        importances = {
+            r.feature_name: r
+            for r in (await session.scalars(select(FeatureImportance))).all()
+        }
+        alerts = (await session.scalars(select(Alert))).all()
+
+    assert set(importances) == set(FEATURES)
+    for name, coefficient in zip(FEATURES, coefficients):
+        assert importances[name].method == "coefficient"
+        assert importances[name].importance == pytest.approx(
+            coefficient / sum(coefficients)
+        )
+    assert len(scores) == len(snapshots) == 12
+    reports = {}
+    for scenario, (_, _, window) in SCENARIOS.items():
+        day = date.fromisoformat(window)
+        response = await client.get(f"/drift/{model_id}/{window}")
+        assert response.status_code == 200
+        api = {row["feature_name"]: row for row in response.json()}
+        assert set(api) == set(FEATURES) | {"__predictions__"}
+        for name, item in api.items():
+            row = scores[day, name]
+            assert item["id"] == str(row.id)
+            assert item["model_id"] == str(row.model_id)
+            assert item["window_date"] == row.window_date.isoformat()
+            assert (
+                datetime.fromisoformat(item["computed_at"].replace("Z", "+00:00"))
+                == row.computed_at
+            )
+            ref, snap = references[name].distribution, snapshots[day, name].distribution
+            assert ref["bin_edges"] == snap["bin_edges"]
+            counts = [
+                np.asarray([h["underflow"], *h["counts"], h["overflow"]])
+                for h in (ref, snap)
+            ]
+            assert sum(counts[1]) == snapshots[day, name].sample_count == BATCH_SIZE
+            assert row.psi == pytest.approx(compute_psi_from_counts(*counts))
+            assert row.js_divergence == pytest.approx(
+                compute_js_divergence_from_counts(*counts)
+            )
+            assert row.ks_statistic == pytest.approx(compute_binned_ks(*counts))
+            assert row.ks_pvalue is None
+            assert row.severity == classify_severity(row.psi)
+            expected = "green" if scenario == "A" or name in FEATURES[3:] else "red"
+            assert row.severity == expected
+            weight = (
+                0
+                if name == "__predictions__"
+                else importances[name].importance
+                / sum(r.importance for r in importances.values())
+                * min(row.psi / settings.psi_red_threshold, 1)
+            )
+            assert row.weighted_score == pytest.approx(weight)
+            for field in (
+                "psi",
+                "js_divergence",
+                "ks_statistic",
+                "ks_pvalue",
+                "weighted_score",
+                "severity",
+            ):
+                assert item[field] == getattr(row, field)
+        response = await client.get(f"/reports/{model_id}/{window}")
+        assert response.status_code == 200
+        reports[scenario] = response.json()
+        report = reports[scenario]
+        summary = report["report_json"]["feature_drift_summary"]
+        assert len(summary) == 5
+        assert {r["feature_name"] for r in summary} == set(FEATURES)
+        assert report["overall_score"] == pytest.approx(
+            100 * (1 - sum(scores[day, name].weighted_score for name in FEATURES))
+        )
+        assert report["report_json"]["output_distribution"][
+            "output_drift_psi"
+        ] == pytest.approx(scores[day, "__predictions__"].psi)
+        assert "KS Statistic" in report["report_markdown"]
+        assert all(name in report["report_markdown"] for name in FEATURES)
+    ranked = reports["B"]["report_json"]["feature_drift_summary"]
+    assert [r["weighted_score"] for r in ranked] == sorted(
+        (r["weighted_score"] for r in ranked), reverse=True
+    )
+    assert any(
+        a["psi"] < b["psi"] for i, a in enumerate(ranked) for b in ranked[i + 1 :]
+    ), "No pair has higher rank and lower PSI"
+    assert reports["B"]["overall_score"] < reports["A"]["overall_score"]
+    day_a, day_b = (date.fromisoformat(SCENARIOS[s][2]) for s in ("A", "B"))
+    assert not [a for a in alerts if a.window_date == day_a]
+    assert len(alerts) == 4
+    assert {(a.feature_name, a.alert_type) for a in alerts} == {
+        (name, "drift_red") for name in FEATURES[:3]
+    } | {("__predictions__", "output_shift")}
+    for alert in alerts:
+        assert alert.window_date == day_b
+        assert f"PSI={scores[day_b, alert.feature_name].psi:.3f}" in alert.message
+        assert str(day_b) in alert.message
+
+
+@pytest.mark.asyncio
+async def test_demo_snapshot_response(integration_context, tmp_path, monkeypatch):
+    from examples.loan_risk_demo.config import SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, _, _, _ = await _demo_lifecycle(
+        client, session_factory, tmp_path, monkeypatch
+    )
+    window = SCENARIOS["A"][2]
+    response = await client.get(f"/ingest/snapshots/{model_id}/{window}")
+    assert response.status_code == 200
+    features = response.json()
+    assert features
+    for feature in features:
+        assert feature["stats"]
+        distribution = feature["distribution"]
+        assert (
+            distribution["underflow"]
+            + sum(distribution["counts"])
+            + distribution["overflow"]
+            == feature["sample_count"]
+        )
+
+
+async def _demo_state(session_factory):
+    from app.models.health_report import HealthReport
+    from app.models.reference_distribution import ReferenceDistribution
+
+    models = (
+        ModelRegistry,
+        ReferenceDistribution,
+        FeatureImportance,
+        Snapshot,
+        DriftScore,
+        HealthReport,
+        Alert,
+    )
+    async with session_factory() as session:
+        return {
+            model.__tablename__: [
+                {
+                    column.name: getattr(row, column.name)
+                    for column in model.__table__.columns
+                }
+                for row in (
+                    await session.scalars(select(model).order_by(model.id))
+                ).all()
+            ]
+            for model in models
+        }
+
+
+@pytest.mark.asyncio
+async def test_demo_repeated_requests(integration_context, tmp_path, monkeypatch):
+    from examples.loan_risk_demo.config import SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, reference, snapshots, _ = await _demo_lifecycle(
+        client, session_factory, tmp_path, monkeypatch
+    )
+    before = await _demo_state(session_factory)
+    assert (await client.post("/ingest/reference", json=reference)).status_code == 200
+    for scenario, (_, _, window) in SCENARIOS.items():
+        assert (
+            await client.post("/ingest/snapshot", json=snapshots[scenario])
+        ).status_code == 200
+        assert (
+            await client.post(f"/drift/{model_id}/{window}/analyze")
+        ).status_code == 200
+        assert (
+            await client.post(
+                f"/reports/{model_id}/generate", json={"week_start": window}
+            )
+        ).status_code == 200
+    after = await _demo_state(session_factory)
+    assert {k: len(v) for k, v in before.items()} == {
+        k: len(v) for k, v in after.items()
+    }
+    assert before["reference_distributions"] == after["reference_distributions"]
+    assert before["snapshots"] == after["snapshots"]
+    assert before["feature_importances"] == after["feature_importances"]
+    for original, repeated in zip(before["health_reports"], after["health_reports"]):
+        for field in ("overall_score", "report_json", "report_markdown"):
+            assert original[field] == repeated[field]
+    for original, repeated in zip(before["drift_scores"], after["drift_scores"]):
+        for field in (
+            "psi",
+            "js_divergence",
+            "ks_statistic",
+            "ks_pvalue",
+            "weighted_score",
+            "severity",
+        ):
+            assert original[field] == repeated[field]
+    alert_id = before["alerts"][0]["id"]
+    assert (await client.patch(f"/alerts/{alert_id}/resolve")).status_code == 200
+    assert (
+        await client.post(f"/drift/{model_id}/{SCENARIOS['B'][2]}/analyze")
+    ).status_code == 200
+    final = await _demo_state(session_factory)
+    assert len(final["alerts"]) == len(before["alerts"])
+    assert (
+        next(a for a in final["alerts"] if a["id"] == alert_id)["resolved_at"]
+        is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_demo_concurrent_requests(
+    integration_context, tmp_path, monkeypatch, caplog
+):
+    import asyncio
+
+    from examples.loan_risk_demo.config import SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, reference, snapshots, _ = await _demo_lifecycle(
+        client, session_factory, tmp_path, monkeypatch
+    )
+    before = await _demo_state(session_factory)
+    window = SCENARIOS["B"][2]
+
+    async def concurrent(url, payload=None):
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(client.post(url, json=payload) for _ in range(5)),
+                return_exceptions=True,
+            ),
+            timeout=60,
+        )
+        assert all(
+            not isinstance(result, BaseException) and result.status_code == 200
+            for result in results
+        ), results
+
+    await concurrent("/ingest/snapshot", snapshots["B"])
+    await concurrent(f"/drift/{model_id}/{window}/analyze")
+    await concurrent(f"/reports/{model_id}/generate", {"week_start": window})
+    fresh_id = await _create_model(client, f"demo-concurrent-{uuid4()}")
+    assert (
+        await client.post(
+            "/ingest/reference", json={**reference, "model_id": str(fresh_id)}
+        )
+    ).status_code == 200
+    await concurrent("/ingest/snapshot", {**snapshots["A"], "model_id": str(fresh_id)})
+    fresh_window = date.fromisoformat(SCENARIOS["A"][2])
+    async with session_factory() as session:
+        for model in (Alert, DriftScore):
+            await session.execute(
+                delete(model).where(
+                    model.model_id == fresh_id, model.window_date == fresh_window
+                )
+            )
+        await session.commit()
+    await concurrent(f"/drift/{fresh_id}/{fresh_window}/analyze")
+    async with session_factory() as session:
+        scores = (
+            await session.scalars(
+                select(DriftScore).where(
+                    DriftScore.model_id == fresh_id,
+                    DriftScore.window_date == fresh_window,
+                )
+            )
+        ).all()
+    assert sorted(score.feature_name for score in scores) == sorted(
+        [*reference["features"], "__predictions__"]
+    )
+    await concurrent(
+        f"/reports/{fresh_id}/generate", {"week_start": fresh_window.isoformat()}
+    )
+    after = await _demo_state(session_factory)
+    assert (
+        len(
+            [
+                report
+                for report in after["health_reports"]
+                if report["model_id"] == fresh_id
+                and report["week_start"] == fresh_window
+            ]
+        )
+        == 1
+    )
+    assert not any(
+        "Drift analysis failed" in record.getMessage() for record in caplog.records
+    )
+    assert len([a for a in after["alerts"] if a["model_id"] == model_id]) == len(
+        before["alerts"]
+    )
+    keys = {
+        "reference_distributions": ("model_id", "feature_name"),
+        "feature_importances": ("model_id", "feature_name"),
+        "snapshots": ("model_id", "window_date", "feature_name"),
+        "drift_scores": ("model_id", "window_date", "feature_name"),
+        "health_reports": ("model_id", "week_start"),
+        "alerts": ("model_id", "window_date", "feature_name", "alert_type"),
+    }
+    for table, fields in keys.items():
+        natural_keys = [tuple(row[field] for field in fields) for row in after[table]]
+        assert len(natural_keys) == len(set(natural_keys))
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_return_real_monitoring_results(
+    integration_context, tmp_path, monkeypatch
+):
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from driftwatch_mcp.server import build_server
+    from examples.loan_risk_demo.config import FEATURES, SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, *_ = await _demo_lifecycle(client, session_factory, tmp_path, monkeypatch)
+    shifted_day = date.fromisoformat(SCENARIOS["B"][2])
+    async with session_factory() as session:
+        stored = {
+            r.feature_name: r
+            for r in (
+                await session.scalars(
+                    select(DriftScore).where(DriftScore.window_date == shifted_day)
+                )
+            ).all()
+        }
+        alert_count = len((await session.scalars(select(Alert))).all())
+
+    server = build_server(client)
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as mcp_session:
+
+        async def call(tool, **arguments):
+            result = await mcp_session.call_tool(tool, arguments)
+            assert not result.isError, result.content
+            return result.structuredContent
+
+        models = await call("list_models")
+        assert [m["id"] for m in models["items"]] == [str(model_id)]
+
+        health = await call("get_model_health", model_id=str(model_id))
+        report = await client.get(f"/reports/{model_id}/latest")
+        assert health["status"] == "critical"
+        assert health["latest_window"] == SCENARIOS["B"][2]
+        assert health["severity_counts"] == {"red": 3, "yellow": 0, "green": 2}
+        assert health["prediction_severity"] == "red"
+        assert health["overall_score"] == report.json()["overall_score"]
+        assert health["report_covers_latest_window"] is True
+
+        drift = await call(
+            "get_feature_drift", model_id=str(model_id), feature_name="annual_income"
+        )
+        assert drift["features"][0]["psi"] == stored["annual_income"].psi
+        assert drift["prediction"]["psi"] == stored["__predictions__"].psi
+
+        stable = await call(
+            "get_feature_drift",
+            model_id=str(model_id),
+            window_date=SCENARIOS["A"][2],
+        )
+        assert {r["severity"] for r in stable["features"]} == {"green"}
+
+        alerts = await call("get_active_alerts", model_id=str(model_id))
+        assert alerts["total"] == alert_count == 4
+
+        weekly = await call(
+            "get_health_report",
+            model_id=str(model_id),
+            week_start=SCENARIOS["A"][2],
+        )
+        assert weekly["week_start"] == SCENARIOS["A"][2]
+        assert weekly["overall_score"] > health["overall_score"]
+
+        analysis = await call("analyze_model_health", model_id=str(model_id))
+        ranked = [r["feature_name"] for r in analysis["problem_features"]]
+        assert set(ranked) == set(FEATURES[:3])
+        assert ranked == sorted(
+            ranked, key=lambda n: stored[n].weighted_score, reverse=True
+        )
+        assert set(analysis["stable_features"]) == set(FEATURES[3:])
+        assert len(analysis["active_alerts"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_model_health_agent_reports_real_demo_evidence(
+    integration_context, tmp_path, monkeypatch
+):
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from driftwatch_mcp.server import build_server
+    from examples.loan_risk_demo.config import FEATURES, SCENARIOS
+    from model_health_agent.graph import build_graph
+
+    client, session_factory = integration_context
+    model_id, *_ = await _demo_lifecycle(client, session_factory, tmp_path, monkeypatch)
+    shifted_day = date.fromisoformat(SCENARIOS["B"][2])
+    async with session_factory() as session:
+        stored = {
+            r.feature_name: r
+            for r in (
+                await session.scalars(
+                    select(DriftScore).where(
+                        DriftScore.model_id == model_id,
+                        DriftScore.window_date == shifted_day,
+                    )
+                )
+            ).all()
+        }
+    server = build_server(client)
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as mcp_session:
+        graph = build_graph(mcp_session)
+        report = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
+        second = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
+
+    assert report == second
+    assert report["status"] == "critical"
+    assert report["mode"] == "offline"
+    findings = report["findings"]
+    expected = sorted(
+        FEATURES[:3], key=lambda n: stored[n].weighted_score, reverse=True
+    )
+    assert [
+        f["feature_name"] for f in findings if f["feature_name"] != "__predictions__"
+    ] == expected
+    for finding in findings:
+        assert finding["drift"]["psi"] == stored[finding["feature_name"]].psi
+    directions = {f["feature_name"]: f["direction"] for f in findings}
+    assert directions["credit_score"] == "below"
+    assert directions["annual_income"] == "below"
+    assert directions["debt_to_income"] == "above"
+    assert set(report["stable_features"]) == set(FEATURES[3:])

@@ -47,7 +47,7 @@ jobs:
       PSI_YELLOW_THRESHOLD: "0.10"
       PSI_RED_THRESHOLD: "0.20"
       KS_PVALUE_THRESHOLD: "0.05"
-      MIN_SAMPLE_WARNING: "30"
+      MIN_SAMPLE_WARNING: "200"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,7 +55,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-demo.txt -r requirements-agent.txt
       - name: Pytest
         run: pytest tests/ -v --cov=app --cov-report=term-missing
 
@@ -71,7 +71,7 @@ jobs:
       - name: Wait for API
         run: |
           for i in {1..30}; do
-            if curl -sf http://localhost:8000/health > /dev/null; then
+            if curl -sf http://localhost:8000/ready > /dev/null; then
               echo "API is healthy"
               exit 0
             fi
@@ -80,6 +80,18 @@ jobs:
           echo "API did not become healthy in time"
           docker compose logs
           exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install demo and agent dependencies
+        run: pip install -r requirements-demo.txt -r requirements-agent.txt
+      - name: Run demo
+        run: python -m examples.loan_risk_demo.run_demo
+      - name: Run model health agent
+        run: |
+          MODEL_ID=$(curl -sf http://localhost:8000/models | python -c 'import json, sys; from examples.loan_risk_demo.config import MODEL_NAME; print(next(m["id"] for m in json.load(sys.stdin)["items"] if m["name"] == MODEL_NAME))')
+          env -u DRIFTWATCH_LLM_BASE_URL -u DRIFTWATCH_LLM_MODEL -u DRIFTWATCH_LLM_API_KEY python -m model_health_agent "$MODEL_ID"
+          env -u DRIFTWATCH_LLM_BASE_URL -u DRIFTWATCH_LLM_MODEL -u DRIFTWATCH_LLM_API_KEY python -m model_health_agent "$MODEL_ID" --json
       - name: Teardown
         if: always()
         run: docker compose down -v

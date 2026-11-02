@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -24,6 +25,12 @@ class DriftScore(Base):
 
     __tablename__ = "drift_scores"
     __table_args__ = (
+        UniqueConstraint(
+            "model_id",
+            "window_date",
+            "feature_name",
+            name="uq_drift_model_window_feature",
+        ),
         CheckConstraint(
             "severity IN ('green','yellow','red')", name="ck_drift_scores_severity"
         ),

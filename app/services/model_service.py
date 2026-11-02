@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from numbers import Integral
 from uuid import UUID
 
 import numpy as np
@@ -52,11 +53,10 @@ async def list_models(db: AsyncSession, page: int, page_size: int) -> ModelListR
 
 def _compute_distribution_stats(values: list[float]) -> dict[str, float]:
     """Compute descriptive statistics for a numeric feature array."""
-    if not values:
-        msg = "Values list cannot be empty"
-        raise ValueError(msg)
-
     arr = np.asarray(values, dtype=float)
+    if arr.ndim != 1 or arr.size == 0 or not np.all(np.isfinite(arr)):
+        raise ValueError("Values must be a non-empty, finite one-dimensional array")
+
     return {
         "mean": float(np.mean(arr)),
         "std": float(np.std(arr)),
@@ -69,18 +69,33 @@ def _compute_distribution_stats(values: list[float]) -> dict[str, float]:
 
 
 def _compute_histogram(
-    values: list[float], bins: int = 10
-) -> dict[str, list[float] | list[int]]:
-    """Compute histogram bins and counts for a numeric feature array."""
-    if not values:
-        msg = "Values list cannot be empty"
-        raise ValueError(msg)
-
+    values: list[float], bins: int = 10, bin_edges: list[float] | None = None
+) -> dict[str, list[float] | list[int] | int]:
+    """Count numeric observations on finite edges, retaining out-of-range values."""
     arr = np.asarray(values, dtype=float)
-    counts, bin_edges = np.histogram(arr, bins=bins)
+    if arr.ndim != 1 or arr.size == 0 or not np.all(np.isfinite(arr)):
+        raise ValueError("Values must be a non-empty, finite one-dimensional array")
+    if isinstance(bins, bool) or not isinstance(bins, Integral) or bins < 1:
+        raise ValueError("bins must be a positive integer")
+
+    edges = (
+        np.histogram_bin_edges(arr, bins=bins)
+        if bin_edges is None
+        else np.asarray(bin_edges, dtype=float)
+    )
+    if (
+        edges.ndim != 1
+        or edges.size < 2
+        or not np.all(np.isfinite(edges))
+        or not np.all(np.diff(edges) > 0)
+    ):
+        raise ValueError("bin_edges must be finite and strictly increasing")
+    counts, _ = np.histogram(arr, bins=edges)
 
     return {
         "bins": list(range(len(counts))),
         "counts": counts.astype(int).tolist(),
-        "bin_edges": bin_edges.astype(float).tolist(),
+        "bin_edges": edges.astype(float).tolist(),
+        "underflow": int(np.count_nonzero(arr < edges[0])),
+        "overflow": int(np.count_nonzero(arr > edges[-1])),
     }

@@ -35,22 +35,23 @@ async def ingest_snapshot(
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    reference_names = set(
-        (
+    references = {
+        row.feature_name: row
+        for row in (
             await db.execute(
-                select(ReferenceDistribution.feature_name).where(
+                select(ReferenceDistribution).where(
                     ReferenceDistribution.model_id == payload.model_id
                 )
             )
         )
         .scalars()
         .all()
-    )
-    if not reference_names:
+    }
+    if not references:
         raise HTTPException(
             status_code=409, detail="Register a reference before snapshots"
         )
-    unknown = set(payload.features) - reference_names
+    unknown = set(payload.features) - references.keys()
     if unknown:
         raise HTTPException(
             status_code=422, detail=f"Features missing reference: {sorted(unknown)}"
@@ -75,7 +76,11 @@ async def ingest_snapshot(
             sample_count = len(values)
 
         stats = _compute_distribution_stats(values)
-        histogram = _compute_histogram(values)
+        reference = references.get(feature_name)
+        histogram = _compute_histogram(
+            values,
+            bin_edges=reference.distribution["bin_edges"] if reference else None,
+        )
 
         existing_result = await db.execute(
             select(Snapshot).where(

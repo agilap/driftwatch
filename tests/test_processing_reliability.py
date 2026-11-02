@@ -106,7 +106,9 @@ async def _seed_shifted_model(session):
                 model_id=model.id,
                 feature_name=feature,
                 window_date=date(2026, 1, 1),
-                distribution=_compute_histogram(shifted),
+                distribution=_compute_histogram(
+                    shifted, bin_edges=_compute_histogram(reference)["bin_edges"]
+                ),
                 stats=_compute_distribution_stats(shifted),
                 sample_count=100,
             )
@@ -125,7 +127,7 @@ async def test_failed_analysis_does_not_commit_partial_scores_or_alerts(
     from app.services import drift_engine
 
     model_id = await _seed_shifted_model(db_session)
-    original = drift_engine.compute_psi
+    original = drift_engine.compute_psi_from_counts
     calls = 0
 
     def fail_second(*args, **kwargs):
@@ -135,7 +137,9 @@ async def test_failed_analysis_does_not_commit_partial_scores_or_alerts(
             raise RuntimeError("second feature failed")
         return original(*args, **kwargs)
 
-    with patch("app.services.drift_engine.compute_psi", side_effect=fail_second):
+    with patch(
+        "app.services.drift_engine.compute_psi_from_counts", side_effect=fail_second
+    ):
         with pytest.raises(RuntimeError, match="second feature"):
             await drift_engine.run_drift_analysis(
                 db_session, model_id, date(2026, 1, 1)

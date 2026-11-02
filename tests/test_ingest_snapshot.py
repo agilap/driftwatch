@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.database import get_db
 from app.main import app
+from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 
 
@@ -270,3 +271,77 @@ async def test_list_snapshot_dates(
 
     assert response.status_code == 200
     assert response.json() == ["2026-03-26", "2026-03-25"]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_uses_reference_edges_and_preserves_outliers_on_retry(
+    ingest_snapshot_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    client, session_factory = ingest_snapshot_context
+    model_id = await _create_model(client, name="snapshot-shared-edges")
+    payload = {
+        "model_id": str(model_id),
+        "timestamp": "2026-03-26T12:00:00Z",
+        "features": {"income": [-10.0, 10.0, 20.0, 30.0, 50.0]},
+    }
+    first = await client.post("/ingest/snapshot", json=payload)
+    retry = await client.post("/ingest/snapshot", json=payload)
+    assert first.status_code == retry.status_code == 200
+
+    async with session_factory() as session:
+        reference = (
+            await session.execute(
+                select(ReferenceDistribution).where(
+                    ReferenceDistribution.model_id == model_id,
+                    ReferenceDistribution.feature_name == "income",
+                )
+            )
+        ).scalar_one()
+        snapshots = (
+            (
+                await session.execute(
+                    select(Snapshot).where(
+                        Snapshot.model_id == model_id,
+                        Snapshot.feature_name == "income",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.distribution["bin_edges"] == reference.distribution["bin_edges"]
+    assert reference.distribution["underflow"] == 0
+    assert reference.distribution["overflow"] == 0
+    assert sum(reference.distribution["counts"]) == 3
+    assert snapshot.distribution["underflow"] == 1
+    assert snapshot.distribution["overflow"] == 1
+    assert sum(snapshot.distribution["counts"]) == 3
+    assert (
+        (
+            sum(snapshot.distribution["counts"])
+            + snapshot.distribution["underflow"]
+            + snapshot.distribution["overflow"]
+        )
+        == snapshot.sample_count
+        == 5
+    )
+
+    identical_reference = await client.post(
+        "/ingest/reference",
+        json={
+            "model_id": str(model_id),
+            "features": {"income": [10.0, 20.0, 30.0]},
+        },
+    )
+    changed_reference = await client.post(
+        "/ingest/reference",
+        json={
+            "model_id": str(model_id),
+            "features": {"income": [10.0, 20.0, 31.0]},
+        },
+    )
+    assert identical_reference.status_code == 200
+    assert changed_reference.status_code == 409

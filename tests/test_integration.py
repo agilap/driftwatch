@@ -391,7 +391,7 @@ async def test_full_pipeline_generate_report(
     assert "feature_drift_summary" in report_json
     assert "output_distribution" in report_json
     assert "top_drifted_features" in report_json
-    assert "feature_to_output_correlation" in report_json
+    assert "feature_to_output_correlation" not in report_json
     assert "recommendations" in report_json
     assert report_json["top_drifted_features"][0]["feature_name"] == "income"
     assert any(
@@ -443,6 +443,7 @@ async def test_get_drift_scores_endpoint(
     assert response.status_code == 200
     items = response.json()
     assert len(items) == 3
+    assert all(item["ks_pvalue"] is None for item in items)
     assert all(item["severity"] in {"green", "yellow", "red"} for item in items)
 
 
@@ -489,3 +490,36 @@ async def test_idempotency_reingest_same_snapshot(
         drift_rows = drift_result.scalars().all()
 
     assert len(drift_rows) == 3
+
+
+@pytest.mark.asyncio
+async def test_legacy_snapshot_edges_return_conflict_until_reingested(
+    integration_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    from app.services.model_service import _compute_histogram
+
+    client, session_factory = integration_context
+    model_id = await _create_model(client, name=f"legacy-edges-{uuid4()}")
+    await _register_reference(client, model_id)
+    await _ingest_snapshot(client, model_id, AUGUST_TS, AUG_SNAPSHOT_FEATURES)
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(Snapshot).where(
+                    Snapshot.model_id == model_id,
+                    Snapshot.feature_name == "income",
+                )
+            )
+        ).scalar_one()
+        row.distribution = _compute_histogram(AUG_SNAPSHOT_FEATURES["income"])
+        await session.commit()
+
+    response = await client.post(f"/drift/{model_id}/{AUGUST_WINDOW_DATE}/analyze")
+    assert response.status_code == 409
+    assert "re-ingest" in response.json()["detail"]
+
+    await _ingest_snapshot(client, model_id, AUGUST_TS, AUG_SNAPSHOT_FEATURES)
+    response = await client.post(f"/drift/{model_id}/{AUGUST_WINDOW_DATE}/analyze")
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    assert all(row["ks_pvalue"] is None for row in response.json())

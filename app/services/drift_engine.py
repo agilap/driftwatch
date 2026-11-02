@@ -6,9 +6,9 @@ from uuid import UUID
 
 import numpy as np
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from scipy.spatial.distance import jensenshannon
-from scipy.stats import chisquare, ks_2samp
+from scipy.stats import chi2_contingency, ks_2samp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,11 +19,11 @@ from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services import alert_service
 from app.services import importance_scorer
+from app.services.model_service import _compute_histogram
 
 logger = logging.getLogger(__name__)
 
 EPSILON = 1e-4
-MIN_BIN_SAMPLES_WARNING = 5
 
 
 class DriftScoreResult(BaseModel):
@@ -33,7 +33,9 @@ class DriftScoreResult(BaseModel):
     window_date: date
     feature_name: str
     ks_statistic: float
-    ks_pvalue: float
+    ks_pvalue: float | None = Field(
+        description="Null for histogram analysis: binned counts cannot provide a sample KS p-value."
+    )
     psi: float
     js_divergence: float
     weighted_score: float
@@ -44,103 +46,83 @@ class DriftScoreResult(BaseModel):
 def _validate_inputs(
     reference: np.ndarray, production: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Validate statistical test inputs and cast to float arrays.
-
-    Args:
-        reference: Reference (training) sample array.
-        production: Production sample array.
-
-    Returns:
-        Tuple of float numpy arrays.
-
-    Raises:
-        ValueError: If either input array is empty.
-    """
+    """Require non-empty, finite, one-dimensional numeric sample arrays."""
     ref = np.asarray(reference, dtype=float)
     prod = np.asarray(production, dtype=float)
-
-    if ref.size == 0 or prod.size == 0:
-        msg = "reference and production arrays must be non-empty"
-        raise ValueError(msg)
-
+    for values in (ref, prod):
+        if values.ndim != 1 or values.size == 0 or not np.all(np.isfinite(values)):
+            raise ValueError("inputs must be non-empty finite one-dimensional arrays")
     return ref, prod
 
 
-def _build_histogram_edges(reference: np.ndarray, bins: int) -> np.ndarray:
-    """Build shared histogram bin edges using the reference distribution.
+def _validate_counts(
+    reference: np.ndarray, production: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Require aligned non-negative counts with positive totals."""
+    ref, prod = _validate_inputs(reference, production)
+    if ref.size != prod.size or np.any(ref < 0) or np.any(prod < 0):
+        raise ValueError("counts must have equal lengths and be non-negative")
+    if not np.any(ref > 0) or not np.any(prod > 0):
+        raise ValueError("each count vector must have a positive total")
+    return ref, prod
 
-    Args:
-        reference: Reference (training) sample array.
-        bins: Number of bins to generate.
 
-    Returns:
-        Array of bin edges with underflow/overflow coverage.
+def _count_proportions(counts: np.ndarray) -> np.ndarray:
+    """Normalize without overflowing the sum of large finite counts."""
+    scaled = counts / np.max(counts)
+    return scaled / np.sum(scaled)
+
+
+def compute_psi_from_counts(reference: np.ndarray, production: np.ndarray) -> float:
+    """Compute uncapped PSI after EPSILON smoothing and renormalization."""
+    ref, prod = _validate_counts(reference, production)
+    p = _count_proportions(ref) + EPSILON
+    q = _count_proportions(prod) + EPSILON
+    p /= np.sum(p)
+    q /= np.sum(q)
+    return max(0.0, float(np.sum((q - p) * np.log(q / p))))
+
+
+def compute_js_divergence_from_counts(
+    reference: np.ndarray, production: np.ndarray
+) -> float:
+    """Compute base-2 Jensen-Shannon divergence in [0, 1]."""
+    ref, prod = _validate_counts(reference, production)
+    p, q = _count_proportions(ref), _count_proportions(prod)
+    return float(np.clip(jensenshannon(p, q, base=2) ** 2, 0.0, 1.0))
+
+
+def compute_binned_ks(reference: np.ndarray, production: np.ndarray) -> float:
+    """Return a binned approximation and lower bound on the sample KS statistic.
+
+    Counts must use shared ordered bins, including underflow and overflow bins.
+    No sample p-value can be inferred from these histogram counts.
     """
-    ref = np.asarray(reference, dtype=float)
-
-    if np.min(ref) == np.max(ref):
-        center = float(ref[0])
-        spread = 0.5
-        edges = np.linspace(center - spread, center + spread, bins + 1)
-    else:
-        edges = np.histogram_bin_edges(ref, bins=bins)
-
-    edges = edges.astype(float)
-    edges[0] = -np.inf
-    edges[-1] = np.inf
-    return edges
+    ref, prod = _validate_counts(reference, production)
+    return float(
+        np.max(
+            np.abs(
+                np.cumsum(_count_proportions(ref)) - np.cumsum(_count_proportions(prod))
+            )
+        )
+    )
 
 
-def _resolve_feature_weights(
-    feature_names: list[str],
-    importances: dict[str, float],
-) -> dict[str, float]:
-    """Resolve normalized feature weights from optional importance values.
-
-    Args:
-        feature_names: Features to score in current drift window.
-        importances: Feature importances keyed by feature name.
-
-    Returns:
-        Normalized per-feature weights that sum to 1.0.
-    """
-    if not feature_names:
-        return {}
-
-    if not importances:
-        equal = 1.0 / len(feature_names)
-        return {feature: equal for feature in feature_names}
-
-    clipped = {
-        feature: max(0.0, float(importances.get(feature, 0.0)))
-        for feature in feature_names
-    }
-    total = float(sum(clipped.values()))
-    if total <= 0:
-        equal = 1.0 / len(feature_names)
-        return {feature: equal for feature in feature_names}
-
-    return {feature: value / total for feature, value in clipped.items()}
-
-
-def _reconstruct_samples_from_histogram(distribution: dict) -> np.ndarray:
-    """Approximate sample array from stored histogram bins and counts.
-
-    Args:
-        distribution: Histogram payload containing counts and bin_edges.
-
-    Returns:
-        Reconstructed sample array using bin midpoints repeated by counts.
-    """
-    counts = np.asarray(distribution.get("counts", []), dtype=int)
-    bin_edges = np.asarray(distribution.get("bin_edges", []), dtype=float)
-
-    if counts.size == 0 or bin_edges.size != counts.size + 1:
-        return np.asarray([], dtype=float)
-
-    safe_counts = np.maximum(counts, 0)
-    midpoints = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    return np.repeat(midpoints, safe_counts)
+def _sample_histogram_counts(
+    reference: np.ndarray, production: np.ndarray, bins: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bin samples on shared reference edges, including out-of-range counts."""
+    ref, prod = _validate_inputs(reference, production)
+    if isinstance(bins, bool) or not isinstance(bins, (int, np.integer)) or bins < 1:
+        raise ValueError("bins must be a positive integer")
+    reference_histogram = _compute_histogram(ref.tolist(), bins=bins)
+    production_histogram = _compute_histogram(
+        prod.tolist(), bin_edges=reference_histogram["bin_edges"]
+    )
+    return tuple(
+        np.asarray([hist["underflow"], *hist["counts"], hist["overflow"]], dtype=float)
+        for hist in (reference_histogram, production_histogram)
+    )
 
 
 def compute_ks_test(
@@ -166,102 +148,31 @@ def compute_ks_test(
 
 
 def compute_psi(reference: np.ndarray, production: np.ndarray, bins: int = 10) -> float:
-    """Compute Population Stability Index between reference and production samples.
-
-    Args:
-        reference: Reference (training) sample array.
-        production: Production sample array.
-        bins: Number of bins. Defaults to 10.
-
-    Returns:
-        PSI score clipped to [0, 1].
-    """
-    ref, prod = _validate_inputs(reference, production)
-    edges = _build_histogram_edges(ref, bins=bins)
-
-    ref_counts, _ = np.histogram(ref, bins=edges)
-    prod_counts, _ = np.histogram(prod, bins=edges)
-
-    if np.any(ref_counts < MIN_BIN_SAMPLES_WARNING) or np.any(
-        prod_counts < MIN_BIN_SAMPLES_WARNING
-    ):
-        logger.warning(
-            "Low histogram bin samples detected for PSI; minimum bin count is %d",
-            min(int(np.min(ref_counts)), int(np.min(prod_counts))),
-        )
-
-    ref_pct = ref_counts / max(np.sum(ref_counts), 1)
-    prod_pct = prod_counts / max(np.sum(prod_counts), 1)
-
-    ref_pct = ref_pct + EPSILON
-    prod_pct = prod_pct + EPSILON
-
-    psi = float(np.sum((prod_pct - ref_pct) * np.log(prod_pct / ref_pct)))
-    return float(np.clip(psi, 0.0, 1.0))
+    """Compute uncapped PSI from samples using shared reference bins."""
+    return compute_psi_from_counts(
+        *_sample_histogram_counts(reference, production, bins)
+    )
 
 
 def compute_js_divergence(
     reference: np.ndarray, production: np.ndarray, bins: int = 10
 ) -> float:
-    """Compute Jensen-Shannon divergence proxy on binned probability vectors.
-
-    Args:
-        reference: Reference (training) sample array.
-        production: Production sample array.
-        bins: Number of bins. Defaults to 10.
-
-    Returns:
-        Jensen-Shannon score clipped to [0, 1].
-    """
-    ref, prod = _validate_inputs(reference, production)
-    edges = _build_histogram_edges(ref, bins=bins)
-
-    ref_counts, _ = np.histogram(ref, bins=edges)
-    prod_counts, _ = np.histogram(prod, bins=edges)
-
-    ref_prob = ref_counts / max(np.sum(ref_counts), 1)
-    prod_prob = prod_counts / max(np.sum(prod_counts), 1)
-
-    js_score = float(jensenshannon(ref_prob, prod_prob))
-    return float(np.clip(js_score, 0.0, 1.0))
+    """Compute base-2 Jensen-Shannon divergence from shared sample histograms."""
+    return compute_js_divergence_from_counts(
+        *_sample_histogram_counts(reference, production, bins)
+    )
 
 
 def compute_chi_square(
     reference: np.ndarray, production: np.ndarray
 ) -> dict[str, float | bool]:
-    """Compute chi-square goodness-of-fit test for categorical arrays.
-
-    Args:
-        reference: Reference categorical sample array.
-        production: Production categorical sample array.
-
-    Returns:
-        Dictionary with chi-square statistic, p-value, and significance flag.
-    """
-    ref, prod = _validate_inputs(reference, production)
-
-    ref_categories, ref_counts = np.unique(ref, return_counts=True)
-    prod_categories, prod_counts = np.unique(prod, return_counts=True)
-    categories = np.union1d(ref_categories, prod_categories)
-
-    ref_map = {
-        category: int(count) for category, count in zip(ref_categories, ref_counts)
-    }
-    prod_map = {
-        category: int(count) for category, count in zip(prod_categories, prod_counts)
-    }
-
-    aligned_ref = np.asarray(
-        [ref_map.get(category, 0) for category in categories], dtype=float
-    )
-    aligned_prod = np.asarray(
-        [prod_map.get(category, 0) for category in categories], dtype=float
-    )
-
-    expected = (aligned_ref / max(np.sum(aligned_ref), 1.0)) * np.sum(aligned_prod)
-    expected = np.maximum(expected, EPSILON)
-
-    result = chisquare(f_obs=aligned_prod, f_exp=expected)
+    """Compare aligned category count vectors with a contingency-table test."""
+    ref, prod = _validate_counts(reference, production)
+    table = np.asarray([ref, prod])
+    table = table[:, np.any(table > 0, axis=0)]
+    if table.shape[1] == 1:
+        return {"statistic": 0.0, "pvalue": 1.0, "significant": False}
+    result = chi2_contingency(table)
     pvalue = float(result.pvalue)
     return {
         "statistic": float(result.statistic),
@@ -374,10 +285,20 @@ async def run_drift_analysis(
     )
 
     raw_importances = await importance_scorer.load_importances(db=db, model_id=model_id)
-    if raw_importances:
-        feature_weights = importance_scorer.normalise_importances(raw_importances)
-    else:
-        feature_weights = importance_scorer.equal_weight_importances(shared_features)
+    feature_weights = importance_scorer.resolve_feature_weights(
+        shared_features, raw_importances
+    )
+
+    # Validate every feature before writing scores or alerts for this window.
+    for feature_name in shared_features:
+        if (
+            reference_by_feature[feature_name].distribution["bin_edges"]
+            != snapshot_by_feature[feature_name].distribution["bin_edges"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Snapshot bin edges differ from reference for {feature_name}; re-ingest this window",
+            )
 
     computed_at = datetime.now(timezone.utc)
     results: list[DriftScoreResult] = []
@@ -385,27 +306,35 @@ async def run_drift_analysis(
     new_alerts = []
 
     for feature_name in shared_features:
-        reference_samples = _reconstruct_samples_from_histogram(
-            reference_by_feature[feature_name].distribution
-        )
-        snapshot_samples = _reconstruct_samples_from_histogram(
-            snapshot_by_feature[feature_name].distribution
-        )
-
-        if reference_samples.size == 0 or snapshot_samples.size == 0:
-            logger.warning(
-                "Skipping feature %s due to empty reconstructed samples", feature_name
+        reference_histogram = reference_by_feature[feature_name].distribution
+        snapshot_histogram = snapshot_by_feature[feature_name].distribution
+        reference_counts, snapshot_counts = (
+            np.asarray(
+                [hist.get("underflow", 0), *hist["counts"], hist.get("overflow", 0)],
+                dtype=float,
             )
-            continue
-
-        ks = compute_ks_test(reference_samples, snapshot_samples)
-        psi = compute_psi(reference_samples, snapshot_samples)
-        js_divergence = compute_js_divergence(reference_samples, snapshot_samples)
+            for hist in (reference_histogram, snapshot_histogram)
+        )
+        snapshot_total = (
+            sum(snapshot_histogram["counts"])
+            + snapshot_histogram.get("underflow", 0)
+            + snapshot_histogram.get("overflow", 0)
+        )
+        if snapshot_total < settings.min_sample_warning:
+            logger.warning(
+                "Feature '%s' snapshot count %s: PSI is inflated by sampling noise at this size",
+                feature_name,
+                snapshot_total,
+            )
+        ks_statistic = compute_binned_ks(reference_counts, snapshot_counts)
+        psi = compute_psi_from_counts(reference_counts, snapshot_counts)
+        js_divergence = compute_js_divergence_from_counts(
+            reference_counts, snapshot_counts
+        )
         severity = classify_severity(psi)
-        psi_normalised = float(np.clip(psi, 0.0, 1.0))
         weighted_score = importance_scorer.compute_weighted_score(
-            drift_magnitude=psi_normalised,
-            feature_importance=feature_weights.get(feature_name, 0.0),
+            drift_magnitude=min(psi / settings.psi_red_threshold, 1.0),
+            feature_importance=feature_weights[feature_name],
         )
 
         existing_result = await db.execute(
@@ -423,8 +352,8 @@ async def run_drift_analysis(
                     model_id=model_id,
                     window_date=window_date,
                     feature_name=feature_name,
-                    ks_statistic=float(ks["statistic"]),
-                    ks_pvalue=float(ks["pvalue"]),
+                    ks_statistic=ks_statistic,
+                    ks_pvalue=None,
                     psi=psi,
                     js_divergence=js_divergence,
                     weighted_score=weighted_score,
@@ -433,8 +362,8 @@ async def run_drift_analysis(
                 )
             )
         else:
-            existing.ks_statistic = float(ks["statistic"])
-            existing.ks_pvalue = float(ks["pvalue"])
+            existing.ks_statistic = ks_statistic
+            existing.ks_pvalue = None
             existing.psi = psi
             existing.js_divergence = js_divergence
             existing.weighted_score = weighted_score
@@ -465,8 +394,8 @@ async def run_drift_analysis(
                 model_id=model_id,
                 window_date=window_date,
                 feature_name=feature_name,
-                ks_statistic=float(ks["statistic"]),
-                ks_pvalue=float(ks["pvalue"]),
+                ks_statistic=ks_statistic,
+                ks_pvalue=None,
                 psi=psi,
                 js_divergence=js_divergence,
                 weighted_score=weighted_score,

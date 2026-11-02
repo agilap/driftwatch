@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     psi_yellow_threshold: float = Field(0.10, alias="PSI_YELLOW_THRESHOLD")
     psi_red_threshold: float = Field(0.20, alias="PSI_RED_THRESHOLD")
     ks_pvalue_threshold: float = Field(0.05, alias="KS_PVALUE_THRESHOLD")
-    min_sample_warning: int = Field(30, alias="MIN_SAMPLE_WARNING")
+    # At 200 samples, mean null PSI is approximately 0.05 for 10 bins.
+    min_sample_warning: int = Field(200, alias="MIN_SAMPLE_WARNING")
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.example"),

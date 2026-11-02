@@ -21,6 +21,9 @@ docker-compose up
 
 API docs: http://localhost:8000/docs
 
+`GET /health` checks liveness; `GET /ready` checks database/schema readiness.
+Compose applies migrations before starting the API.
+
 ## Key Concepts
 
 - Reference distribution vs production snapshot:

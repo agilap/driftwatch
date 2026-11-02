@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.feature_importance import FeatureImportance
+from app.models.model_registry import ModelRegistry
 
 ALLOWED_METHODS = {"shap", "coefficient", "manual"}
 
@@ -45,12 +46,12 @@ def normalise_importances(importances: dict[str, float]) -> dict[str, float]:
     if not importances:
         return {}
 
-    if any(value < 0 for value in importances.values()):
-        msg = "importance values must be non-negative"
+    if any(not np.isfinite(value) or value < 0 for value in importances.values()):
+        msg = "importance values must be finite and non-negative"
         raise ValueError(msg)
 
     total = float(sum(importances.values()))
-    if total == 0:
+    if not np.isfinite(total) or total <= 0:
         msg = "at least one importance value must be greater than zero"
         raise ValueError(msg)
 
@@ -168,7 +169,7 @@ def import_from_json(json_data: dict, method: str) -> dict[str, float]:
             msg = f"importance for feature '{feature_name}' must be numeric"
             raise ValueError(msg)
         numeric = float(value)
-        if numeric < 0:
+        if not np.isfinite(numeric) or numeric < 0:
             msg = f"importance for feature '{feature_name}' must be non-negative"
             raise ValueError(msg)
         parsed[str(feature_name)] = numeric
@@ -193,6 +194,9 @@ async def upsert_importances(
     Returns:
             List of persisted feature importance rows.
     """
+    await db.execute(
+        select(ModelRegistry.id).where(ModelRegistry.id == model_id).with_for_update()
+    )
     persisted: list[FeatureImportance] = []
     for feature_name, importance in importances.items():
         existing_result = await db.execute(

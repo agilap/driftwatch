@@ -72,7 +72,19 @@ async def _create_model(
 ) -> UUID:
     response = await client.post("/models", json={"name": name, "version": version})
     assert response.status_code == 201
-    return UUID(response.json()["id"])
+    model_id = UUID(response.json()["id"])
+    reference = await client.post(
+        "/ingest/reference",
+        json={
+            "model_id": str(model_id),
+            "features": {
+                "income": [10.0, 20.0, 30.0],
+                "credit_score": [600.0, 620.0, 640.0],
+            },
+        },
+    )
+    assert reference.status_code == 200
+    return model_id
 
 
 @pytest.mark.asyncio

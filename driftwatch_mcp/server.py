@@ -211,6 +211,41 @@ def build_server(client: httpx.AsyncClient) -> FastMCP:
 
     @server.tool(structured_output=False)
     @_structured
+    async def get_feature_distribution(
+        model_id: UUID,
+        feature_name: Annotated[str, Field(min_length=1)],
+        window_date: date | None = None,
+    ) -> dict:
+        """Get stored reference and snapshot stats for a feature."""
+        reference = await _get(client, f"/ingest/reference/{model_id}")
+        if window_date is None:
+            dates = await _get(client, f"/ingest/snapshots/{model_id}")
+            if not dates:
+                raise ApiError("not_found", "No snapshot windows found")
+            window = dates[0]
+        else:
+            window = window_date.isoformat()
+        snapshots = await _get(client, f"/ingest/snapshots/{model_id}/{window}")
+        ref = next(
+            (r for r in reference["items"] if r["feature_name"] == feature_name), None
+        )
+        snapshot = next(
+            (r for r in snapshots if r["feature_name"] == feature_name), None
+        )
+        if ref is None or snapshot is None:
+            raise ApiError(
+                "not_found", f"No distribution for {feature_name} in window {window}"
+            )
+        return {
+            "model_id": str(model_id),
+            "feature_name": feature_name,
+            "window_date": window,
+            "reference_stats": ref["stats"],
+            "window_stats": snapshot["stats"],
+        }
+
+    @server.tool(structured_output=False)
+    @_structured
     async def get_active_alerts(model_id: UUID) -> dict:
         """Get every unresolved alert for a model. Unknown model IDs are an error."""
         await _get(client, f"/models/{model_id}")

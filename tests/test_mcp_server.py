@@ -18,6 +18,7 @@ TOOLS = {
     "list_models",
     "get_model_health",
     "get_feature_drift",
+    "get_feature_distribution",
     "get_active_alerts",
     "get_health_report",
     "analyze_model_health",
@@ -84,7 +85,8 @@ async def test_tools_are_discoverable_with_validated_ids():
 @pytest.mark.parametrize("tool", sorted(TOOLS - {"list_models"}))
 async def test_invalid_model_id_is_rejected_before_any_request(tool):
     calls = []
-    result, _ = await _call(_api({}, calls), tool, model_id="not-a-uuid")
+    args = {"feature_name": "a"} if tool == "get_feature_distribution" else {}
+    result, _ = await _call(_api({}, calls), tool, model_id="not-a-uuid", **args)
     assert result.isError
     assert "model_id" in result.content[0].text
     assert calls == []
@@ -93,7 +95,8 @@ async def test_invalid_model_id_is_rejected_before_any_request(tool):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", sorted(TOOLS - {"list_models"}))
 async def test_unknown_model_is_a_coded_error(tool):
-    result, payload = await _call(_api({}), tool, model_id=str(uuid4()))
+    args = {"feature_name": "a"} if tool == "get_feature_distribution" else {}
+    result, payload = await _call(_api({}), tool, model_id=str(uuid4()), **args)
     assert result.isError
     assert payload["error"]["code"] == "not_found"
     assert payload["error"]["status"] == 404
@@ -229,6 +232,77 @@ async def test_feature_filter_and_explicit_window():
     )
     assert result.isError
     assert missing["error"]["code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_feature_distribution_returns_stored_stats_and_latest_window():
+    routes = {
+        f"/ingest/reference/{MODEL_ID}": (
+            200,
+            {"items": [{"feature_name": "a", "stats": {"mean": 4}}]},
+        ),
+        f"/ingest/snapshots/{MODEL_ID}": (200, ["2026-01-07", "2026-01-01"]),
+        f"/ingest/snapshots/{MODEL_ID}/2026-01-07": (
+            200,
+            [
+                {
+                    "feature_name": "a",
+                    "stats": {"mean": 3},
+                    "distribution": {
+                        "bin_edges": [0.0, 1.0],
+                        "counts": [1],
+                        "underflow": 0,
+                        "overflow": 0,
+                    },
+                    "sample_count": 1,
+                }
+            ],
+        ),
+    }
+    client = _api(routes)
+    result, payload = await _call(
+        client, "get_feature_distribution", model_id=MODEL_ID, feature_name="a"
+    )
+    assert not result.isError
+    assert payload == {
+        "model_id": MODEL_ID,
+        "feature_name": "a",
+        "window_date": "2026-01-07",
+        "reference_stats": {"mean": 4},
+        "window_stats": {"mean": 3},
+    }
+    result, payload = await _call(
+        client,
+        "get_feature_distribution",
+        model_id=MODEL_ID,
+        feature_name="missing",
+        window_date="2026-01-07",
+    )
+    assert result.isError
+    assert payload["error"]["code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_feature_distribution_requires_both_stats_and_a_window():
+    routes = {
+        f"/ingest/reference/{MODEL_ID}": (
+            200,
+            {"items": [{"feature_name": "a", "stats": {"mean": 4}}]},
+        ),
+        f"/ingest/snapshots/{MODEL_ID}": (200, []),
+        f"/ingest/snapshots/{MODEL_ID}/2026-01-07": (200, []),
+    }
+    client = _api(routes)
+    for args in ({}, {"window_date": "2026-01-07"}):
+        result, payload = await _call(
+            client,
+            "get_feature_distribution",
+            model_id=MODEL_ID,
+            feature_name="a",
+            **args,
+        )
+        assert result.isError
+        assert payload["error"]["code"] == "not_found"
 
 
 @pytest.mark.asyncio

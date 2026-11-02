@@ -878,3 +878,82 @@ async def test_demo_concurrent_requests(
     for table, fields in keys.items():
         natural_keys = [tuple(row[field] for field in fields) for row in after[table]]
         assert len(natural_keys) == len(set(natural_keys))
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_return_real_monitoring_results(
+    integration_context, tmp_path, monkeypatch
+):
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from driftwatch_mcp.server import build_server
+    from examples.loan_risk_demo.config import FEATURES, SCENARIOS
+
+    client, session_factory = integration_context
+    model_id, *_ = await _demo_lifecycle(client, session_factory, tmp_path, monkeypatch)
+    shifted_day = date.fromisoformat(SCENARIOS["B"][2])
+    async with session_factory() as session:
+        stored = {
+            r.feature_name: r
+            for r in (
+                await session.scalars(
+                    select(DriftScore).where(DriftScore.window_date == shifted_day)
+                )
+            ).all()
+        }
+        alert_count = len((await session.scalars(select(Alert))).all())
+
+    server = build_server(client)
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as mcp_session:
+
+        async def call(tool, **arguments):
+            result = await mcp_session.call_tool(tool, arguments)
+            assert not result.isError, result.content
+            return result.structuredContent
+
+        models = await call("list_models")
+        assert [m["id"] for m in models["items"]] == [str(model_id)]
+
+        health = await call("get_model_health", model_id=str(model_id))
+        report = await client.get(f"/reports/{model_id}/latest")
+        assert health["status"] == "critical"
+        assert health["latest_window"] == SCENARIOS["B"][2]
+        assert health["severity_counts"] == {"red": 3, "yellow": 0, "green": 2}
+        assert health["prediction_severity"] == "red"
+        assert health["overall_score"] == report.json()["overall_score"]
+        assert health["report_covers_latest_window"] is True
+
+        drift = await call(
+            "get_feature_drift", model_id=str(model_id), feature_name="annual_income"
+        )
+        assert drift["features"][0]["psi"] == stored["annual_income"].psi
+        assert drift["prediction"]["psi"] == stored["__predictions__"].psi
+
+        stable = await call(
+            "get_feature_drift",
+            model_id=str(model_id),
+            window_date=SCENARIOS["A"][2],
+        )
+        assert {r["severity"] for r in stable["features"]} == {"green"}
+
+        alerts = await call("get_active_alerts", model_id=str(model_id))
+        assert alerts["total"] == alert_count == 4
+
+        weekly = await call(
+            "get_health_report",
+            model_id=str(model_id),
+            week_start=SCENARIOS["A"][2],
+        )
+        assert weekly["week_start"] == SCENARIOS["A"][2]
+        assert weekly["overall_score"] > health["overall_score"]
+
+        analysis = await call("analyze_model_health", model_id=str(model_id))
+        ranked = [r["feature_name"] for r in analysis["problem_features"]]
+        assert set(ranked) == set(FEATURES[:3])
+        assert ranked == sorted(
+            ranked, key=lambda n: stored[n].weighted_score, reverse=True
+        )
+        assert set(analysis["stable_features"]) == set(FEATURES[3:])
+        assert len(analysis["active_alerts"]) == 4

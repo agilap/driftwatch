@@ -55,7 +55,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: pip install -r requirements-demo.txt
+        run: pip install -r requirements-demo.txt -r requirements-mcp.txt
       - name: Pytest
         run: pytest tests/ -v --cov=app --cov-report=term-missing
 

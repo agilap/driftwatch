@@ -1,0 +1,4 @@
+-r requirements.txt
+mcp==1.28.1
+# Newer sse-starlette needs a Starlette version the pinned FastAPI rejects.
+sse-starlette<3

@@ -18,13 +18,13 @@ from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services.drift_engine import (
-    _resolve_feature_weights,
     classify_severity,
     compute_js_divergence,
     compute_ks_test,
     compute_psi,
     run_drift_analysis,
 )
+from app.services.importance_scorer import resolve_feature_weights
 from app.services.model_service import _compute_distribution_stats, _compute_histogram
 
 
@@ -47,14 +47,14 @@ def test_compute_psi_high_drift() -> None:
     assert psi > 0.20
 
 
-def test_compute_psi_epsilon_prevents_log_zero() -> None:
-    reference = np.asarray([0.0] * 50 + [1.0] * 50)
+def test_compute_psi_extreme_shift_is_uncapped() -> None:
+    reference = np.asarray([0.0] * 100)
     production = np.asarray([10.0] * 100)
-
-    psi = compute_psi(reference, production, bins=10)
-
-    assert np.isfinite(psi)
-    assert 0.0 <= psi <= 1.0
+    # Three bins: underflow, finite reference bin, overflow. After smoothing,
+    # the exchanged unit masses give 2 * log(10001) / (1 + 3 * EPSILON).
+    psi = compute_psi(reference, production, bins=1)
+    assert psi == pytest.approx(2 * np.log(10001) / 1.0003)
+    assert psi > 1.0
 
 
 def test_compute_ks_test_significant() -> None:
@@ -104,7 +104,7 @@ def test_classify_severity_all_bands() -> None:
 
 
 def test_weighted_score_with_importances() -> None:
-    weights = _resolve_feature_weights(
+    weights = resolve_feature_weights(
         feature_names=["income", "credit_score"],
         importances={"income": 0.9, "credit_score": 0.1},
     )
@@ -116,7 +116,7 @@ def test_weighted_score_with_importances() -> None:
 
 
 def test_weighted_score_equal_weight_fallback() -> None:
-    weights = _resolve_feature_weights(
+    weights = resolve_feature_weights(
         feature_names=["f1", "f2", "f3", "f4"],
         importances={},
     )
@@ -136,7 +136,7 @@ def _database_url() -> str:
     )
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def run_migrations() -> None:
     """Apply migrations for drift engine integration checks."""
     cfg = Config("alembic.ini")
@@ -145,7 +145,7 @@ def run_migrations() -> None:
 
 
 @pytest_asyncio.fixture
-async def db_session() -> AsyncSession:
+async def db_session(run_migrations: None) -> AsyncSession:
     """Provide isolated async DB session for integration checks."""
     engine = create_async_engine(_database_url(), future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -187,7 +187,10 @@ async def test_run_drift_analysis_writes_rows(db_session: AsyncSession) -> None:
             model_id=model.id,
             window_date=date(2026, 3, 27),
             feature_name="income",
-            distribution=_compute_histogram(production_values),
+            distribution=_compute_histogram(
+                production_values,
+                bin_edges=_compute_histogram(reference_values)["bin_edges"],
+            ),
             stats=_compute_distribution_stats(production_values),
             sample_count=len(production_values),
         )
@@ -221,5 +224,8 @@ async def test_run_drift_analysis_writes_rows(db_session: AsyncSession) -> None:
     row = persisted.scalar_one_or_none()
 
     assert row is not None
+    assert row.ks_pvalue is None
+    assert results[0].ks_pvalue is None
+    assert row.weighted_score == pytest.approx(1.0)
     assert row.psi is not None
     assert row.severity in {"green", "yellow", "red"}

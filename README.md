@@ -28,17 +28,17 @@ Compose applies migrations before starting the API.
 
 - Reference distribution vs production snapshot:
   Reference data is the baseline (usually training data statistics). Production snapshots are daily (or periodic) batches from live inference traffic. Drift is measured by comparing each snapshot to the reference.
-- KS test (Kolmogorov-Smirnov):
-  KS checks whether two numeric samples likely came from the same underlying distribution. A low p-value means the production feature shape/location changed significantly.
+- KS statistic (Kolmogorov-Smirnov):
+  Histogram analysis reports the maximum CDF difference over shared reference bins, a lower bound on the sample KS statistic. Histogram p-values are unavailable.
 - PSI (Population Stability Index):
   PSI compares binned proportions between reference and production. It gives an intuitive shift magnitude where higher values indicate stronger population movement.
 - JS divergence (Jensen-Shannon):
-  JS divergence is a symmetric distance between two probability distributions. It is bounded and stable for both continuous-binned and categorical-style comparisons.
+  JS divergence is a symmetric divergence between two probability distributions, computed in base 2 and bounded between 0 and 1.
 - Weighted drift scoring:
-  Not all drift should page the team. DriftWatch multiplies drift magnitude by feature importance so low-business-impact features do not drown out critical ones.
+  Not all drift should page the team. DriftWatch multiplies `min(PSI / PSI_RED_THRESHOLD, 1)` by feature importance normalized over analyzed features.
 - Health score formula:
   Overall weekly health is computed as:
-  `overall_health = 100 × (1 - mean(weighted_scores))`
+  `overall_health = 100 × (1 - sum(weighted_scores))`. Reports without drift data have no health score.
 
 ## API Reference
 

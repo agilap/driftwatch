@@ -25,7 +25,7 @@ def _database_url() -> str:
     )
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def run_migrations() -> None:
     """Apply migrations for report generator tests."""
     cfg = Config("alembic.ini")
@@ -34,7 +34,7 @@ def run_migrations() -> None:
 
 
 @pytest_asyncio.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
+async def db_session(run_migrations: None) -> AsyncGenerator[AsyncSession, None]:
     """Provide isolated async DB session for report tests."""
     engine = create_async_engine(_database_url(), future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -93,7 +93,7 @@ def test_overall_health_score_no_drift() -> None:
 
 
 def test_overall_health_score_full_drift() -> None:
-    score = compute_overall_health_score([1.0, 1.0, 1.0])
+    score = compute_overall_health_score([0.2, 0.3, 0.5])
     assert score == pytest.approx(0.0)
 
 
@@ -193,7 +193,7 @@ async def test_generate_report_structure(db_session: AsyncSession) -> None:
     assert "feature_drift_summary" in report_json
     assert "output_distribution" in report_json
     assert "top_drifted_features" in report_json
-    assert "feature_to_output_correlation" in report_json
+    assert "feature_to_output_correlation" not in report_json
     assert "recommendations" in report_json
 
 
@@ -218,7 +218,9 @@ async def test_generate_report_markdown_renders(db_session: AsyncSession) -> Non
     assert "## Executive Summary" in markdown
     assert "## Feature Drift Summary" in markdown
     assert "## Output Distribution" in markdown
-    assert "## Feature to Output Correlation" in markdown
+    assert "## Feature to Output Correlation" not in markdown
+    assert "KS Statistic" in markdown
+    assert "KS p-value" not in markdown
     assert "## Recommendations" in markdown
 
 
@@ -288,3 +290,58 @@ async def test_generate_report_upsert(db_session: AsyncSession) -> None:
     assert len(rows) == 1
     assert first.id == second.id
     assert second.overall_score <= first.overall_score
+
+
+def test_overall_health_score_sums_weighted_evidence() -> None:
+    assert compute_overall_health_score([0.1, 0.2]) == pytest.approx(70.0)
+
+
+def test_overall_health_score_without_evidence_is_unknown() -> None:
+    assert compute_overall_health_score([]) is None
+
+
+@pytest.mark.asyncio
+async def test_report_without_evidence_has_no_health(db_session: AsyncSession) -> None:
+    model = await _create_model(db_session)
+    report = await generate_report(
+        db_session, model.id, date(2026, 3, 16), date(2026, 3, 22)
+    )
+    assert report.overall_score is None
+    assert report.report_json["executive_summary"]["overall_score"] is None
+    assert "No drift data available" in report.report_markdown
+    assert "100.0/100" not in report.report_markdown
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("psi, expected_health", [(0.0, 100.0), (0.2, 0.0)])
+async def test_report_health_endpoints_and_null_pvalue(
+    db_session: AsyncSession, psi: float, expected_health: float
+) -> None:
+    model = await _create_model(db_session)
+    week_start = date(2026, 3, 16)
+    await _insert_week_drift(
+        db_session,
+        model.id,
+        week_start,
+        [
+            {
+                "feature_name": "income",
+                "psi": psi,
+                "ks_statistic": 0.375,
+                "ks_pvalue": None,
+            },
+            {
+                "feature_name": "age",
+                "psi": psi,
+                "ks_statistic": 0.375,
+                "ks_pvalue": None,
+            },
+        ],
+    )
+    report = await generate_report(db_session, model.id, week_start, date(2026, 3, 22))
+    assert report.overall_score == pytest.approx(expected_health)
+    assert all(
+        row["ks_pvalue"] is None for row in report.report_json["feature_drift_summary"]
+    )
+    assert "0.375" in report.report_markdown
+    assert "KS p-value" not in report.report_markdown

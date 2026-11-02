@@ -12,13 +12,15 @@ from app.models.health_report import HealthReport
 from app.models.snapshot import Snapshot
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
-from app.schemas.ingest import SnapshotPayload, SnapshotResponse
+from app.schemas.ingest import (
+    PREDICTIONS_FEATURE_NAME,
+    SnapshotPayload,
+    SnapshotResponse,
+)
 from app.services.model_service import (
     _compute_distribution_stats,
     _compute_histogram,
 )
-
-PREDICTIONS_FEATURE_NAME = "__predictions__"
 
 
 async def ingest_snapshot(

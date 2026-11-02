@@ -14,6 +14,7 @@ from app.models.model_registry import ModelRegistry
 from app.models.snapshot import Snapshot
 from app.models.reference_distribution import ReferenceDistribution
 from app.schemas.ingest import (
+    PREDICTIONS_FEATURE_NAME,
     ReferenceListResponse,
     ReferencePayload,
     ReferenceResponse,
@@ -43,6 +44,10 @@ async def register_reference(
             select(Snapshot.id).where(Snapshot.model_id == payload.model_id).limit(1)
         )
     ).first() is not None
+    feature_batches = dict(payload.features)
+    if payload.predictions is not None:
+        feature_batches[PREDICTIONS_FEATURE_NAME] = payload.predictions
+
     # Validate the whole request before changing any ORM rows.
     if frozen:
         references = {
@@ -57,7 +62,7 @@ async def register_reference(
             .scalars()
             .all()
         }
-        for name, values in payload.features.items():
+        for name, values in feature_batches.items():
             row = references.get(name)
             if (
                 row is None
@@ -70,7 +75,7 @@ async def register_reference(
                 )
     features_registered: list[str] = []
 
-    for feature_name, values in payload.features.items():
+    for feature_name, values in feature_batches.items():
         if len(values) < settings.min_sample_warning:
             logger.warning(
                 "Feature '%s' has only %d samples; below warning threshold %d",

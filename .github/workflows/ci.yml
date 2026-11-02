@@ -47,7 +47,7 @@ jobs:
       PSI_YELLOW_THRESHOLD: "0.10"
       PSI_RED_THRESHOLD: "0.20"
       KS_PVALUE_THRESHOLD: "0.05"
-      MIN_SAMPLE_WARNING: "30"
+      MIN_SAMPLE_WARNING: "200"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,7 +55,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-demo.txt
       - name: Pytest
         run: pytest tests/ -v --cov=app --cov-report=term-missing
 

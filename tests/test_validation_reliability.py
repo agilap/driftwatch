@@ -53,22 +53,24 @@ def test_reject_invalid_features(features):
 
 @pytest.mark.parametrize("predictions", [[], [1, 2], [float("nan")]])
 def test_reject_invalid_predictions(predictions):
-    with pytest.raises(ValidationError):
-        SnapshotPayload(
-            model_id=uuid4(),
-            timestamp=datetime.now(timezone.utc),
-            features={"x": [1]},
-            predictions=predictions,
-        )
+    for schema in (ReferencePayload, SnapshotPayload):
+        with pytest.raises(ValidationError):
+            schema(
+                model_id=uuid4(),
+                timestamp=datetime.now(timezone.utc),
+                features={"x": [1]},
+                predictions=predictions,
+            )
 
 
 def test_reserved_prediction_name_and_blank_model():
-    with pytest.raises(ValidationError):
-        SnapshotPayload(
-            model_id=uuid4(),
-            timestamp=datetime.now(timezone.utc),
-            features={"__predictions__": [1]},
-        )
+    for schema in (ReferencePayload, SnapshotPayload):
+        with pytest.raises(ValidationError):
+            schema(
+                model_id=uuid4(),
+                timestamp=datetime.now(timezone.utc),
+                features={"__predictions__": [1]},
+            )
     with pytest.raises(ValidationError):
         ModelCreate(name="  ")
 
@@ -193,4 +195,135 @@ async def test_reference_membership_freeze_and_concurrent_ingestion():
             if model:
                 await db.delete(model)
                 await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_prediction_baseline_scoring_and_alerts():
+    from app.models.alert import Alert
+    from app.models.reference_distribution import ReferenceDistribution
+
+    url = os.environ["DATABASE_URL"]
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", url)
+    await asyncio.to_thread(command.upgrade, cfg, "head")
+    engine = create_async_engine(url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    model_ids = [uuid4(), uuid4()]
+    values = [float(i % 10) for i in range(200)]
+    predictions = [v / 10 for v in values]
+    try:
+        async with sessions() as db:
+            db.add_all([ModelRegistry(id=i, name=f"prediction-{i}") for i in model_ids])
+            await db.commit()
+            reference = ReferencePayload(
+                model_id=model_ids[0], features={"x": values}, predictions=predictions
+            )
+            await register_reference(db, reference)
+            await register_reference(
+                db, ReferencePayload(model_id=model_ids[1], features={"x": values})
+            )
+            for model_id in model_ids:
+                await ingest_snapshot(
+                    db,
+                    SnapshotPayload(
+                        model_id=model_id,
+                        timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        features={"x": [v + 3 for v in values]},
+                        predictions=[2.0] * len(values),
+                    ),
+                )
+            await register_reference(db, reference)
+            for model_id, baseline in (
+                (model_ids[0], [0.5] * 200),
+                (model_ids[1], predictions),
+            ):
+                with pytest.raises(HTTPException) as frozen:
+                    await register_reference(
+                        db,
+                        ReferencePayload(
+                            model_id=model_id,
+                            features={"x": values},
+                            predictions=baseline,
+                        ),
+                    )
+                assert frozen.value.status_code == 409
+            ref = (
+                await db.execute(
+                    select(ReferenceDistribution).where(
+                        ReferenceDistribution.model_id == model_ids[0],
+                        ReferenceDistribution.feature_name == "__predictions__",
+                    )
+                )
+            ).scalar_one()
+            snap = (
+                await db.execute(
+                    select(Snapshot).where(
+                        Snapshot.model_id == model_ids[0],
+                        Snapshot.feature_name == "__predictions__",
+                    )
+                )
+            ).scalar_one()
+            assert ref.distribution["bin_edges"] == snap.distribution["bin_edges"]
+            scored = await run_drift_analysis(db, model_ids[0], date(2026, 1, 1))
+            without_baseline = await run_drift_analysis(
+                db, model_ids[1], date(2026, 1, 1)
+            )
+            assert {row.feature_name for row in without_baseline} == {"x"}
+            output = next(
+                row for row in scored if row.feature_name == "__predictions__"
+            )
+            assert output.severity == "red"
+            assert (
+                output.psi > 0 and output.js_divergence > 0 and output.ks_statistic > 0
+            )
+            assert output.weighted_score == 0
+            assert next(
+                row for row in scored if row.feature_name == "x"
+            ).weighted_score == pytest.approx(without_baseline[0].weighted_score)
+            report = await generate_report(
+                db, model_ids[0], date(2025, 12, 29), date(2026, 1, 4)
+            )
+            other_report = await generate_report(
+                db, model_ids[1], date(2025, 12, 29), date(2026, 1, 4)
+            )
+            assert report.overall_score == other_report.overall_score
+            assert report.report_json["output_distribution"][
+                "output_drift_psi"
+            ] == pytest.approx(output.psi)
+            stored = (
+                await db.execute(
+                    select(DriftScore).where(
+                        DriftScore.model_id == model_ids[0],
+                        DriftScore.feature_name == "x",
+                    )
+                )
+            ).scalar_one()
+            assert stored.weighted_score > 0
+            assert report.report_json["feature_drift_summary"][0][
+                "weighted_score"
+            ] == pytest.approx(stored.weighted_score)
+            await run_drift_analysis(db, model_ids[0], date(2026, 1, 1))
+            alerts = (
+                (
+                    await db.execute(
+                        select(Alert).where(
+                            Alert.model_id == model_ids[0],
+                            Alert.feature_name == "__predictions__",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(alerts) == 1
+            assert alerts[0].alert_type == "output_shift"
+            assert alerts[0].message.startswith("Model prediction distribution PSI=")
+    finally:
+        async with sessions() as db:
+            for model_id in model_ids:
+                model = await db.get(ModelRegistry, model_id)
+                if model:
+                    await db.delete(model)
+            await db.commit()
         await engine.dispose()

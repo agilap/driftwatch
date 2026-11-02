@@ -17,6 +17,7 @@ from app.models.drift_score import DriftScore
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.services import alert_service
 from app.services import importance_scorer
 from app.services.model_service import _compute_histogram
@@ -286,7 +287,8 @@ async def run_drift_analysis(
 
     raw_importances = await importance_scorer.load_importances(db=db, model_id=model_id)
     feature_weights = importance_scorer.resolve_feature_weights(
-        shared_features, raw_importances
+        [name for name in shared_features if name != PREDICTIONS_FEATURE_NAME],
+        raw_importances,
     )
 
     # Validate every feature before writing scores or alerts for this window.
@@ -334,7 +336,7 @@ async def run_drift_analysis(
         severity = classify_severity(psi)
         weighted_score = importance_scorer.compute_weighted_score(
             drift_magnitude=min(psi / settings.psi_red_threshold, 1.0),
-            feature_importance=feature_weights[feature_name],
+            feature_importance=feature_weights.get(feature_name, 0.0),
         )
 
         existing_result = await db.execute(
@@ -371,17 +373,25 @@ async def run_drift_analysis(
             existing.computed_at = computed_at
 
         if severity == "red":
+            label = (
+                "Model prediction distribution"
+                if feature_name == PREDICTIONS_FEATURE_NAME
+                else f"Feature {feature_name!r}"
+            )
             alert = await alert_service.create_alert(
                 db=db,
                 model_id=model_id,
                 feature_name=feature_name,
-                alert_type="drift_red",
+                alert_type=(
+                    "output_shift"
+                    if feature_name == PREDICTIONS_FEATURE_NAME
+                    else "drift_red"
+                ),
                 severity="red",
                 window_date=window_date,
                 commit=False,
                 message=(
-                    f"Feature '{feature_name}' PSI={psi:.3f} exceeds RED threshold "
-                    f"on {window_date}"
+                    f"{label} PSI={psi:.3f} exceeds RED threshold on {window_date}"
                 ),
             )
 

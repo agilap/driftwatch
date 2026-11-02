@@ -80,6 +80,13 @@ jobs:
           echo "API did not become healthy in time"
           docker compose logs
           exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install demo dependencies
+        run: pip install -r requirements-demo.txt
+      - name: Run demo
+        run: python -m examples.loan_risk_demo.run_demo
       - name: Teardown
         if: always()
         run: docker compose down -v

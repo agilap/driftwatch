@@ -120,7 +120,14 @@ async def test_recommendation_retraining_when_score_below_60(
     report = await generate_report(db_session, model.id, week_start, week_end)
     recommendations = report.report_json["recommendations"]
 
-    assert any("Model retraining recommended" in item for item in recommendations)
+    assert (
+        "Evaluate model performance on recent labeled data before deciding to retrain"
+        in recommendations
+    )
+    assert (
+        "Drift measures input and prediction distribution change; it does not establish performance degradation."
+        in report.report_markdown
+    )
 
 
 @pytest.mark.asyncio

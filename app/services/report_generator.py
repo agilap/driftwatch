@@ -94,7 +94,13 @@ def _render_markdown_report(
     else:
         lines.append(f"Output drift PSI: {output_drift:.3f}")
 
-    lines.extend(["", "## Recommendations"])
+    lines.extend(
+        [
+            "",
+            "## Recommendations",
+            "Drift measures input and prediction distribution change; it does not establish performance degradation.",
+        ]
+    )
     if recommendations:
         for recommendation in recommendations:
             lines.append(f"- {recommendation}")
@@ -179,7 +185,9 @@ async def generate_report(
 
     recommendations: list[str] = []
     if overall_score is not None and overall_score < 60:
-        recommendations.append("Model retraining recommended")
+        recommendations.append(
+            "Evaluate model performance on recent labeled data before deciding to retrain"
+        )
     for row in red_features:
         recommendations.append(f"Investigate {row['feature_name']} immediately")
     if output_drift is not None and output_drift > 0.20:

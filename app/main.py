@@ -35,7 +35,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info("DriftWatch API shutting down")
 
 
-app = FastAPI(title="DriftWatch", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="DriftWatch", version="0.2.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -97,7 +97,7 @@ app.include_router(alerts.router, prefix="/alerts")
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Simple liveness endpoint used by local and CI smoke checks."""
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/ready")

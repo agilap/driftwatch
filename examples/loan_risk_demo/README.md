@@ -28,3 +28,5 @@ Labels are Bernoulli samples with probability equal to the logistic function app
 - **Prediction drift** measures changes in the distribution of model probabilities.
 - **Concept drift** means the relationship between inputs and outcomes changes; this demo keeps its label rule fixed.
 - **Measured performance** compares predictions with known labels. AUC is measured separately on held-out reference data and each batch. Drift alone does not establish whether model performance has degraded.
+
+Example measurements from a seeded run on a fresh stack: held-out AUC 0.8074; stable batch AUC 0.8059 and health 99.43; shifted batch AUC 0.8367 and health 16.09. The shifted batch produced three `drift_red` alerts and one `output_shift` alert. AUC rose while health fell. The label rule stayed fixed, so this demo introduces no concept drift; the cause of the higher AUC was not investigated. This example does not establish a general relationship between drift and performance.

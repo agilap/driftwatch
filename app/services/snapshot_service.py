@@ -4,9 +4,10 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import delete, distinct, select
+from sqlalchemy import delete, distinct, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.alert import Alert
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.snapshot import Snapshot
@@ -17,10 +18,7 @@ from app.schemas.ingest import (
     SnapshotPayload,
     SnapshotResponse,
 )
-from app.services.model_service import (
-    _compute_distribution_stats,
-    _compute_histogram,
-)
+from app.services.model_service import same_summary, summarize_feature
 
 
 async def ingest_snapshot(
@@ -59,30 +57,49 @@ async def ingest_snapshot(
             status_code=422, detail=f"Features missing reference: {sorted(unknown)}"
         )
 
+    if payload.predictions is not None and PREDICTIONS_FEATURE_NAME not in references:
+        raise HTTPException(
+            status_code=422,
+            detail="Predictions supplied but the reference has no predictions",
+        )
+
     window_date = payload.timestamp.date()
     features_recorded: list[str] = []
     sample_count = 0
-    snapshot_changed = False
 
     feature_batches: dict[str, list[float]] = dict(payload.features)
     if payload.predictions is not None:
         feature_batches[PREDICTIONS_FEATURE_NAME] = payload.predictions
 
+    # Validate the whole batch before changing any ORM rows.
+    summaries = {}
     for feature_name, values in feature_batches.items():
         if not values:
             raise HTTPException(
                 status_code=422, detail=f"Feature '{feature_name}' has no values"
             )
-
-        if sample_count == 0:
-            sample_count = len(values)
-
-        stats = _compute_distribution_stats(values)
         reference = references.get(feature_name)
-        histogram = _compute_histogram(
+        summaries[feature_name] = summarize_feature(
+            feature_name,
             values,
             bin_edges=reference.distribution["bin_edges"] if reference else None,
         )
+
+    # A re-post replaces the whole window, so absent features leave it.
+    removed = await db.execute(
+        delete(Snapshot).where(
+            Snapshot.model_id == payload.model_id,
+            Snapshot.window_date == window_date,
+            Snapshot.feature_name.not_in(list(feature_batches)),
+        )
+    )
+    snapshot_changed = removed.rowcount > 0
+
+    for feature_name, values in feature_batches.items():
+        if sample_count == 0:
+            sample_count = len(values)
+
+        stats, histogram = summaries[feature_name]
 
         existing_result = await db.execute(
             select(Snapshot).where(
@@ -106,9 +123,9 @@ async def ingest_snapshot(
                 )
             )
         else:
-            snapshot_changed |= (
-                existing.distribution != histogram or existing.stats != stats
-            )
+            snapshot_changed |= not same_summary(
+                existing.distribution, histogram
+            ) or not same_summary(existing.stats, stats)
             existing.distribution = histogram
             existing.stats = stats
             existing.sample_count = len(values)
@@ -117,7 +134,20 @@ async def ingest_snapshot(
 
     if snapshot_changed:
         # Commit new samples and invalidate their derived evidence atomically.
-        # Historical alerts remain audit records even while analysis is pending.
+        # Historical alerts remain audit records: superseded here, they stay
+        # queryable as resolved, and analysis raises a new alert if still red.
+        now = datetime.now(timezone.utc)
+        await db.execute(
+            update(Alert)
+            .where(
+                Alert.model_id == payload.model_id,
+                Alert.window_date == window_date,
+                Alert.superseded_at.is_(None),
+            )
+            .values(
+                superseded_at=now, resolved_at=func.coalesce(Alert.resolved_at, now)
+            )
+        )
         await db.execute(
             delete(DriftScore).where(
                 DriftScore.model_id == payload.model_id,

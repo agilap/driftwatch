@@ -96,11 +96,17 @@ def test_import_from_json_invalid_raises() -> None:
     [
         ({"income": 2.0, "unrelated": 100.0}, {"income": 1.0, "age": 0.0}),
         ({"unrelated": 100.0}, {"income": 0.5, "age": 0.5}),
-        ({"income": 0.0, "age": 0.0}, {"income": 0.5, "age": 0.5}),
+        # Explicit zeros stay zero; equal weight is only for missing importances.
+        ({"income": 0.0, "age": 0.0}, {"income": 0.0, "age": 0.0}),
+        ({"income": 0.0, "unrelated": 1.0}, {"income": 0.0, "age": 0.0}),
     ],
 )
 def test_resolve_weights_only_analyzed_features(importances, expected) -> None:
     assert resolve_feature_weights(["income", "age"], importances) == expected
+
+
+def test_resolve_weights_keeps_a_lone_explicit_zero_at_zero() -> None:
+    assert resolve_feature_weights(["b"], {"a": 1.0, "b": 0.0}) == {"b": 0.0}
 
 
 def test_rank_uses_red_threshold_without_observed_rescaling() -> None:

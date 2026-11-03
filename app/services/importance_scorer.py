@@ -3,12 +3,15 @@ from __future__ import annotations
 from uuid import UUID
 
 import numpy as np
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.feature_importance import FeatureImportance
 from app.models.model_registry import ModelRegistry
+from app.models.reference_distribution import ReferenceDistribution
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 
 ALLOWED_METHODS = {"shap", "coefficient", "manual"}
 
@@ -85,12 +88,18 @@ def equal_weight_importances(feature_names: list[str]) -> dict[str, float]:
 def resolve_feature_weights(
     feature_names: list[str], importances: dict[str, float]
 ) -> dict[str, float]:
-    """Normalize importance over analyzed features, with equal-weight fallback."""
+    """Normalize importance over analyzed features.
+
+    Equal weight applies only when no analyzed feature has a stored importance.
+    Explicit zeros stay zero, even if every analyzed feature is zero.
+    """
+    if not any(feature in importances for feature in feature_names):
+        return equal_weight_importances(feature_names)
     selected = {feature: importances.get(feature, 0.0) for feature in feature_names}
     if any(not np.isfinite(value) or value < 0 for value in selected.values()):
         raise ValueError("importance values must be finite and non-negative")
     if not any(value > 0 for value in selected.values()):
-        return equal_weight_importances(feature_names)
+        return selected
     return normalise_importances(selected)
 
 
@@ -190,25 +199,32 @@ def import_from_json(json_data: dict, method: str) -> dict[str, float]:
     return normalise_importances(parsed)
 
 
-async def upsert_importances(
+def check_importance_coverage(features: set[str], importances: dict) -> None:
+    """Require importances for exactly the reference features; zeros are allowed."""
+    missing = sorted(features - set(importances))
+    unknown = sorted(set(importances) - features)
+    if missing or unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Importances must cover exactly the reference features; "
+                f"missing: {missing}, unknown: {unknown}"
+            ),
+        )
+
+
+async def replace_importances(
     db: AsyncSession,
     model_id: UUID,
     importances: dict[str, float],
-    method: str,
+    method: str | None,
 ) -> list[FeatureImportance]:
-    """Upsert normalized feature importances for a model.
-
-    Args:
-            db: Database session.
-            model_id: Monitored model identifier.
-            importances: Normalized feature importances.
-            method: Method used to derive importances.
-
-    Returns:
-            List of persisted feature importance rows.
-    """
+    """Replace a model's whole importance set in the caller's transaction."""
     await db.execute(
-        select(ModelRegistry.id).where(ModelRegistry.id == model_id).with_for_update()
+        delete(FeatureImportance).where(
+            FeatureImportance.model_id == model_id,
+            FeatureImportance.feature_name.not_in(list(importances)),
+        )
     )
     persisted: list[FeatureImportance] = []
     for feature_name, importance in importances.items():
@@ -232,6 +248,45 @@ async def upsert_importances(
             existing.importance = importance
             existing.method = method
             persisted.append(existing)
+    return persisted
+
+
+async def upsert_importances(
+    db: AsyncSession,
+    model_id: UUID,
+    importances: dict[str, float],
+    method: str,
+) -> list[FeatureImportance]:
+    """Replace a model's normalized feature importances.
+
+    Args:
+            db: Database session.
+            model_id: Monitored model identifier.
+            importances: Normalized feature importances.
+            method: Method used to derive importances.
+
+    Returns:
+            List of persisted feature importance rows.
+
+    Raises:
+            HTTPException: 409 without a reference, 422 if coverage does not match.
+    """
+    await db.execute(
+        select(ModelRegistry.id).where(ModelRegistry.id == model_id).with_for_update()
+    )
+    features = set(
+        await db.scalars(
+            select(ReferenceDistribution.feature_name).where(
+                ReferenceDistribution.model_id == model_id
+            )
+        )
+    )
+    if not features:
+        raise HTTPException(
+            status_code=409, detail="Register a reference before importances"
+        )
+    check_importance_coverage(features - {PREDICTIONS_FEATURE_NAME}, importances)
+    persisted = await replace_importances(db, model_id, importances, method)
 
     await db.commit()
 

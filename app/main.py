@@ -64,15 +64,44 @@ async def database_exception_handler(_: Request, exc: SQLAlchemyError) -> JSONRe
     )
 
 
+@app.exception_handler(OSError)
+async def database_connection_exception_handler(
+    _: Request, exc: OSError
+) -> JSONResponse:
+    """Return the database 503 when a connection fails below SQLAlchemy.
+
+    asyncpg lets ConnectionRefusedError and socket.gaierror escape unwrapped, and the
+    API does no other I/O that would reach this handler.
+    """
+    logger.exception("Database connection error: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database error", "code": "DATABASE_ERROR"},
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     _: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Return a standard 422 payload for validation failures."""
-    logger.warning("Validation error: %s", exc)
+    # Only loc and type: the exception's own text includes submitted sample values.
+    logger.warning(
+        "Validation error: %s",
+        [{"loc": error["loc"], "type": error["type"]} for error in exc.errors()],
+    )
     return JSONResponse(
         status_code=422,
-        content={"detail": "Validation error", "code": "VALIDATION_ERROR"},
+        content={
+            "detail": "Validation error",
+            "code": "VALIDATION_ERROR",
+            # Feature names stay in loc and msg as schema names; input and ctx are
+            # left out so sample values are never returned.
+            "errors": [
+                {"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+                for error in exc.errors()
+            ],
+        },
     )
 
 

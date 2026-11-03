@@ -30,17 +30,16 @@ jobs:
         env:
           POSTGRES_USER: driftwatch
           POSTGRES_PASSWORD: driftwatch
-          POSTGRES_DB: driftwatch
+          POSTGRES_DB: driftwatch_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U driftwatch -d driftwatch"
+          --health-cmd "pg_isready -U driftwatch -d driftwatch_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch
-      SECRET_KEY: changeme-in-production
+      TEST_DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch_test
       ALERT_WEBHOOK_URL: ""
       REPORT_SCHEDULE_CRON: "0 0 * * 1"
       LOG_LEVEL: INFO
@@ -57,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-demo.txt -r requirements-agent.txt
       - name: Pytest
-        run: pytest tests/ -v --cov=app --cov-report=term-missing
+        run: pytest tests/ -v --cov=app --cov=scheduler --cov=driftwatch_mcp --cov=model_health_agent --cov-report=term-missing
 
   smoke-docker-compose:
     runs-on: ubuntu-latest

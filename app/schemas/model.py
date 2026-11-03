@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.schemas.ingest import has_unstorable_text
+
 
 class ModelCreate(BaseModel):
     """Payload for creating a monitored model."""
@@ -16,6 +18,15 @@ class ModelCreate(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("model name must not be blank")
+        if has_unstorable_text(value):
+            raise ValueError("model name must not contain NUL or invalid characters")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: str | None) -> str | None:
+        if value is not None and has_unstorable_text(value):
+            raise ValueError("model version must not contain NUL or invalid characters")
         return value
 
 

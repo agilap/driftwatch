@@ -4,6 +4,7 @@ from numbers import Integral
 from uuid import UUID
 
 import numpy as np
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,15 +58,19 @@ def _compute_distribution_stats(values: list[float]) -> dict[str, float]:
     if arr.ndim != 1 or arr.size == 0 or not np.all(np.isfinite(arr)):
         raise ValueError("Values must be a non-empty, finite one-dimensional array")
 
-    return {
-        "mean": float(np.mean(arr)),
-        "std": float(np.std(arr)),
-        "min": float(np.min(arr)),
-        "max": float(np.max(arr)),
-        "p25": float(np.percentile(arr, 25)),
-        "p50": float(np.percentile(arr, 50)),
-        "p75": float(np.percentile(arr, 75)),
-    }
+    with np.errstate(over="ignore", invalid="ignore"):
+        stats = {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+            "min": float(np.min(arr)),
+            "max": float(np.max(arr)),
+            "p25": float(np.percentile(arr, 25)),
+            "p50": float(np.percentile(arr, 50)),
+            "p75": float(np.percentile(arr, 75)),
+        }
+    if not all(np.isfinite(value) for value in stats.values()):
+        raise ValueError("values overflow when computing statistics")
+    return stats
 
 
 def _compute_histogram(
@@ -99,3 +104,32 @@ def _compute_histogram(
         "underflow": int(np.count_nonzero(arr < edges[0])),
         "overflow": int(np.count_nonzero(arr > edges[-1])),
     }
+
+
+def _float_leaves(value):
+    if isinstance(value, dict):
+        return {key: _float_leaves(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_float_leaves(item) for item in value]
+    return float(value)
+
+
+def same_summary(stored: dict, computed: dict) -> bool:
+    """Compare stats or histograms; JSONB returns large floats like 3e+23 as ints."""
+    return _float_leaves(stored) == _float_leaves(computed)
+
+
+def summarize_feature(
+    feature_name: str, values: list[float], bin_edges: list[float] | None = None
+) -> tuple[dict[str, float], dict[str, list[float] | list[int] | int]]:
+    """Return stats and histogram, or a 422 for samples they cannot represent."""
+    try:
+        return (
+            _compute_distribution_stats(values),
+            _compute_histogram(values, bin_edges=bin_edges),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Feature '{feature_name}' has values too extreme to summarize: {exc}",
+        ) from exc

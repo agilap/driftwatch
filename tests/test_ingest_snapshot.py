@@ -21,10 +21,7 @@ from app.models.snapshot import Snapshot
 
 
 def _database_url() -> str:
-    return os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch",
-    )
+    return os.environ["DATABASE_URL"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -151,6 +148,15 @@ async def test_ingest_snapshot_predictions_stored(
 ) -> None:
     client, session_factory = ingest_snapshot_context
     model_id = await _create_model(client, name="snapshot-preds")
+    reference = await client.post(
+        "/ingest/reference",
+        json={
+            "model_id": str(model_id),
+            "features": {"income": [10.0, 20.0, 30.0]},
+            "predictions": [0.1, 0.2, 0.3],
+        },
+    )
+    assert reference.status_code == 200
 
     response = await client.post(
         "/ingest/snapshot",

@@ -8,8 +8,8 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Text,
-    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -23,12 +23,14 @@ class Alert(Base):
 
     __tablename__ = "alerts"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_alert_model_feature_window_type",
             "model_id",
             "feature_name",
             "window_date",
             "alert_type",
-            name="uq_alert_model_feature_window_type",
+            unique=True,
+            postgresql_where=text("superseded_at IS NULL"),
         ),
         CheckConstraint(
             "alert_type IN ('drift_red','output_shift','data_gap')",
@@ -52,6 +54,9 @@ class Alert(Base):
     severity: Mapped[str | None] = mapped_column(Text, nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(

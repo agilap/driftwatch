@@ -3,9 +3,14 @@ import math
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, StrictFloat, field_validator, model_validator
 
 PREDICTIONS_FEATURE_NAME = "__predictions__"
+
+
+def has_unstorable_text(value: str) -> bool:
+    """PostgreSQL text cannot hold NUL characters or lone surrogates."""
+    return "\x00" in value or value != value.encode("utf-8", "ignore").decode("utf-8")
 
 
 def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float]]:
@@ -13,6 +18,8 @@ def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float
         raise ValueError("features must not be empty")
     lengths = set()
     for name, values in features.items():
+        if has_unstorable_text(name):
+            raise ValueError("feature names must not contain NUL or invalid characters")
         if name == PREDICTIONS_FEATURE_NAME:
             raise ValueError("use the predictions field for prediction samples")
         if not name.strip() or name != name.strip():
@@ -30,6 +37,8 @@ def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float
 def _validate_importances(values: dict[str, float]) -> dict[str, float]:
     if not values or any(not name.strip() or name != name.strip() for name in values):
         raise ValueError("importances require nonblank feature names")
+    if any(has_unstorable_text(name) for name in values):
+        raise ValueError("feature names must not contain NUL or invalid characters")
     if any(not math.isfinite(value) or value < 0 for value in values.values()):
         raise ValueError("importances must be finite and non-negative")
     if not math.isfinite(sum(values.values())) or sum(values.values()) <= 0:
@@ -51,9 +60,9 @@ class ReferencePayload(BaseModel):
     """Payload for registering reference feature distributions."""
 
     model_id: UUID
-    features: dict[str, list[float]]
-    predictions: list[float] | None = None
-    feature_importances: dict[str, float] | None = None
+    features: dict[str, list[StrictFloat]]
+    predictions: list[StrictFloat] | None = None
+    feature_importances: dict[str, StrictFloat] | None = None
     importance_method: Literal["shap", "coefficient", "manual"] | None = None
 
     _features_valid = field_validator("features")(_validate_features)
@@ -62,9 +71,8 @@ class ReferencePayload(BaseModel):
     def validate_importances(self):
         _validate_predictions(self.features, self.predictions)
         if self.feature_importances is not None:
+            # Coverage depends on stored features once frozen; the service checks it.
             _validate_importances(self.feature_importances)
-            if set(self.feature_importances) - set(self.features):
-                raise ValueError("importance features must belong to the reference")
         return self
 
 
@@ -97,8 +105,8 @@ class SnapshotPayload(BaseModel):
 
     model_id: UUID
     timestamp: datetime
-    features: dict[str, list[float]]
-    predictions: list[float] | None = None
+    features: dict[str, list[StrictFloat]]
+    predictions: list[StrictFloat] | None = None
 
     _features_valid = field_validator("features")(_validate_features)
 
@@ -140,7 +148,7 @@ class SnapshotFeatureResponse(BaseModel):
 class ImportanceUploadRequest(BaseModel):
     """Payload for uploading feature importances for a model."""
 
-    importances: dict[str, float]
+    importances: dict[str, StrictFloat]
     method: Literal["shap", "coefficient", "manual"]
 
     _importances_valid = field_validator("importances")(_validate_importances)

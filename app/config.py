@@ -6,7 +6,6 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     database_url: str = Field(..., alias="DATABASE_URL")
-    secret_key: str = Field(..., alias="SECRET_KEY")
     alert_webhook_url: str = Field("", alias="ALERT_WEBHOOK_URL")
     report_schedule_cron: str = Field("0 0 * * 1", alias="REPORT_SCHEDULE_CRON")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
@@ -17,7 +16,7 @@ class Settings(BaseSettings):
     min_sample_warning: int = Field(200, alias="MIN_SAMPLE_WARNING")
 
     model_config = SettingsConfigDict(
-        env_file=(".env", ".env.example"),
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )

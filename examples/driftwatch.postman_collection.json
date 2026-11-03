@@ -2,55 +2,308 @@
   "info": {
     "name": "DriftWatch API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Minimal collection for DriftWatch core endpoints"
+    "description": "End-to-end DriftWatch flow: health, model, reference, snapshot, analysis, drift, alerts and reports. Run the requests in order; Create Model saves modelId. Small arrays show payload shape, not reliable drift estimates."
   },
   "item": [
     {
       "name": "Health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/health",
-          "host": ["{{baseUrl}}"],
-          "path": ["health"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
         }
       }
     },
     {
       "name": "Create Model",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 201', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('modelId', pm.response.json().id);"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
-        "header": [{"key": "Content-Type", "value": "application/json"}],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"name\": \"loan-scorer-v3\",\n  \"version\": \"v3\"\n}"
-        },
         "url": {
           "raw": "{{baseUrl}}/models",
-          "host": ["{{baseUrl}}"],
-          "path": ["models"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "models"
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"postman-{{$guid}}\",\n  \"version\": \"1\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Register Reference",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/ingest/reference",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ingest",
+            "reference"
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"model_id\": \"{{modelId}}\",\n  \"features\": {\n    \"income\": [\n      10,\n      20,\n      30,\n      40,\n      50,\n      60,\n      70,\n      80,\n      90,\n      100\n    ]\n  },\n  \"predictions\": [\n    0.1,\n    0.2,\n    0.3,\n    0.4,\n    0.5,\n    0.6,\n    0.7,\n    0.8,\n    0.9,\n    1.0\n  ],\n  \"feature_importances\": {\n    \"income\": 1\n  },\n  \"importance_method\": \"manual\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Ingest Snapshot",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/ingest/snapshot",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ingest",
+            "snapshot"
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"model_id\": \"{{modelId}}\",\n  \"timestamp\": \"2026-08-10T12:00:00Z\",\n  \"features\": {\n    \"income\": [\n      210,\n      220,\n      230,\n      240,\n      250,\n      260,\n      270,\n      280,\n      290,\n      300\n    ]\n  },\n  \"predictions\": [\n    0.1,\n    0.2,\n    0.3,\n    0.4,\n    0.5,\n    0.6,\n    0.7,\n    0.8,\n    0.9,\n    1.0\n  ]\n}"
+        }
+      }
+    },
+    {
+      "name": "Analyze Window",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/drift/{{modelId}}/2026-08-10/analyze",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "drift",
+            "{{modelId}}",
+            "2026-08-10",
+            "analyze"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Window Drift",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));",
+              "pm.test('income is red', () => pm.expect(pm.response.json().find(r => r.feature_name === 'income').severity).to.eql('red'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/drift/{{modelId}}/2026-08-10",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "drift",
+            "{{modelId}}",
+            "2026-08-10"
+          ]
+        }
+      }
+    },
+    {
+      "name": "List Active Alerts",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));",
+              "pm.test('one active alert', () => pm.expect(pm.response.json().total).to.eql(1));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/alerts/{{modelId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "alerts",
+            "{{modelId}}"
+          ]
         }
       }
     },
     {
       "name": "Generate Report",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
-        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": {
+          "raw": "{{baseUrl}}/reports/{{modelId}}/generate",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reports",
+            "{{modelId}}",
+            "generate"
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\n  \"week_start\": \"2026-08-10\"\n}"
-        },
+        }
+      }
+    },
+    {
+      "name": "Latest Report",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('returns 200', () => pm.response.to.have.status(200));",
+              "pm.test('covers the generated week', () => pm.expect(pm.response.json().week_start).to.eql('2026-08-10'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
         "url": {
-          "raw": "{{baseUrl}}/reports/{{modelId}}/generate",
-          "host": ["{{baseUrl}}"],
-          "path": ["reports", "{{modelId}}", "generate"]
+          "raw": "{{baseUrl}}/reports/{{modelId}}/latest",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "reports",
+            "{{modelId}}",
+            "latest"
+          ]
         }
       }
     }
   ],
   "variable": [
-    {"key": "baseUrl", "value": "http://localhost:8000"},
-    {"key": "modelId", "value": ""}
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "modelId",
+      "value": ""
+    }
   ]
 }

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -21,7 +21,7 @@ from app.schemas.ingest import (
     RegisteredFeatureResponse,
 )
 from app.services import importance_scorer
-from app.services.model_service import _compute_distribution_stats, _compute_histogram
+from app.services.model_service import same_summary, summarize_feature
 
 logger = logging.getLogger(__name__)
 
@@ -48,32 +48,54 @@ async def register_reference(
     if payload.predictions is not None:
         feature_batches[PREDICTIONS_FEATURE_NAME] = payload.predictions
 
-    # Validate the whole request before changing any ORM rows.
-    if frozen:
-        references = {
-            row.feature_name: row
-            for row in (
-                await db.execute(
-                    select(ReferenceDistribution).where(
-                        ReferenceDistribution.model_id == payload.model_id
-                    )
+    references = {
+        row.feature_name: row
+        for row in (
+            await db.execute(
+                select(ReferenceDistribution).where(
+                    ReferenceDistribution.model_id == payload.model_id
                 )
             )
-            .scalars()
-            .all()
-        }
-        for name, values in feature_batches.items():
+        )
+        .scalars()
+        .all()
+    }
+
+    # Validate the whole request before changing any ORM rows.
+    summaries = {
+        name: summarize_feature(name, values)
+        for name, values in feature_batches.items()
+    }
+    if frozen:
+        for name, (stats, histogram) in summaries.items():
             row = references.get(name)
             if (
                 row is None
-                or row.distribution != _compute_histogram(values)
-                or row.stats != _compute_distribution_stats(values)
+                or not same_summary(row.distribution, histogram)
+                or not same_summary(row.stats, stats)
             ):
                 raise HTTPException(
                     status_code=409,
-                    detail="Reference is immutable after snapshots; register a new model version",
+                    detail=(
+                        "Reference is immutable after snapshots; "
+                        "register a new model under a new name"
+                    ),
                 )
+    stored_features = set(references) - {PREDICTIONS_FEATURE_NAME}
+    if payload.feature_importances:
+        importance_scorer.check_importance_coverage(
+            stored_features if frozen else set(payload.features),
+            payload.feature_importances,
+        )
     features_registered: list[str] = []
+
+    if not frozen:
+        await db.execute(
+            delete(ReferenceDistribution).where(
+                ReferenceDistribution.model_id == payload.model_id,
+                ReferenceDistribution.feature_name.not_in(list(feature_batches)),
+            )
+        )
 
     for feature_name, values in feature_batches.items():
         if len(values) < settings.min_sample_warning:
@@ -84,16 +106,8 @@ async def register_reference(
                 settings.min_sample_warning,
             )
 
-        stats = _compute_distribution_stats(values)
-        histogram = _compute_histogram(values)
-
-        existing_result = await db.execute(
-            select(ReferenceDistribution).where(
-                ReferenceDistribution.model_id == payload.model_id,
-                ReferenceDistribution.feature_name == feature_name,
-            )
-        )
-        existing = existing_result.scalar_one_or_none()
+        stats, histogram = summaries[feature_name]
+        existing = references.get(feature_name)
 
         if existing is None:
             db.add(
@@ -116,28 +130,21 @@ async def register_reference(
             json_data=payload.feature_importances,
             method=payload.importance_method or "manual",
         )
-
-        for feature_name, importance in normalised.items():
-            existing_result = await db.execute(
-                select(FeatureImportance).where(
-                    FeatureImportance.model_id == payload.model_id,
-                    FeatureImportance.feature_name == feature_name,
-                )
+        await importance_scorer.replace_importances(
+            db, payload.model_id, normalised, payload.importance_method
+        )
+    elif not frozen and stored_features != set(payload.features):
+        cleared = await db.execute(
+            delete(FeatureImportance).where(
+                FeatureImportance.model_id == payload.model_id
             )
-            existing = existing_result.scalar_one_or_none()
-
-            if existing is None:
-                db.add(
-                    FeatureImportance(
-                        model_id=payload.model_id,
-                        feature_name=feature_name,
-                        importance=importance,
-                        method=payload.importance_method,
-                    )
-                )
-            else:
-                existing.importance = importance
-                existing.method = payload.importance_method
+        )
+        if cleared.rowcount:
+            logger.warning(
+                "Reference features changed for model %s without new importances; "
+                "cleared stored importances, so weighting falls back to equal weight",
+                payload.model_id,
+            )
 
     await db.commit()
 

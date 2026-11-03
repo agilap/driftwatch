@@ -2,7 +2,10 @@
 
 import json
 import os
+import subprocess
 import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
 from uuid import uuid4
 
 import httpx
@@ -338,3 +341,56 @@ async def test_stdio_process_starts_and_reports_an_unreachable_api():
             result = await session.call_tool("list_models", {})
     assert result.isError
     assert result.structuredContent["error"]["code"] == "service_unavailable"
+
+
+class _StubApi(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"items": [], "total": 0}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_stdio_server_keeps_stderr_free_of_request_logs(tmp_path):
+    api = HTTPServer(("127.0.0.1", 0), _StubApi)
+    Thread(target=api.serve_forever, daemon=True).start()
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "driftwatch_mcp"],
+        env={**os.environ, "DRIFTWATCH_URL": f"http://127.0.0.1:{api.server_port}"},
+    )
+    stderr = tmp_path / "stderr.txt"
+    try:
+        with stderr.open("w") as errlog:
+            async with stdio_client(parameters, errlog=errlog) as streams:
+                async with ClientSession(*streams) as session:
+                    await session.initialize()
+                    result = await session.call_tool("list_models", {})
+    finally:
+        api.shutdown()
+    assert not result.isError
+    text = stderr.read_text()
+    assert "Processing request" not in text
+    assert "HTTP Request:" not in text
+
+
+def test_server_logging_keeps_warnings_but_drops_info():
+    code = (
+        "import logging, httpx\n"
+        "from driftwatch_mcp.server import build_server\n"
+        "build_server(httpx.AsyncClient())\n"
+        "logging.getLogger('httpx').info('quiet-info')\n"
+        "logging.getLogger('mcp.server.lowlevel.server').warning('loud-warning')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert "quiet-info" not in result.stderr
+    assert "loud-warning" in result.stderr

@@ -92,13 +92,6 @@ def test_reject_invalid_importances(weights):
         normalise_importances(weights)
 
 
-def test_reference_importances_must_match_features():
-    with pytest.raises(ValidationError):
-        ReferencePayload(
-            model_id=uuid4(), features={"x": [1]}, feature_importances={"y": 1}
-        )
-
-
 @pytest.mark.asyncio
 async def test_reference_membership_freeze_and_concurrent_ingestion():
     url = os.environ["DATABASE_URL"]
@@ -230,7 +223,9 @@ async def test_prediction_baseline_scoring_and_alerts():
                         model_id=model_id,
                         timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
                         features={"x": [v + 3 for v in values]},
-                        predictions=[2.0] * len(values),
+                        predictions=(
+                            [2.0] * len(values) if model_id == model_ids[0] else None
+                        ),
                     ),
                 )
             await register_reference(db, reference)

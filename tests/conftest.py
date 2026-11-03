@@ -1,10 +1,38 @@
+import os
 from collections.abc import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
-from app.database import get_db
-from app.main import app
+
+def _require_test_database() -> str:
+    """Refuse to run against anything but a dedicated *_test database: tests TRUNCATE."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.exit(
+            "TEST_DATABASE_URL is not set. Tests TRUNCATE tables, so they need a "
+            "dedicated database whose name ends in _test."
+        )
+    try:
+        name = make_url(url).database or ""
+    except ArgumentError:
+        pytest.exit("TEST_DATABASE_URL is not a valid database URL.")
+    if not name.endswith("_test"):
+        pytest.exit(
+            f"TEST_DATABASE_URL points at database {name!r}; tests TRUNCATE tables, "
+            "so its name must end in _test."
+        )
+    return url
+
+
+# Must run before any app import: app.config reads DATABASE_URL at import time.
+os.environ["DATABASE_URL"] = _require_test_database()
+
+from app.database import get_db  # noqa: E402
+from app.main import app  # noqa: E402
 
 
 @pytest_asyncio.fixture

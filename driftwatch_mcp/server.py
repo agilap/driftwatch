@@ -156,7 +156,8 @@ async def _health(client: httpx.AsyncClient, model_id: UUID) -> dict[str, Any]:
 
 def build_server(client: httpx.AsyncClient) -> FastMCP:
     """Build the server around an injected client, so tests can target any API."""
-    server = FastMCP("driftwatch")
+    # WARNING on the root logger also hides per-request INFO lines from mcp and httpx.
+    server = FastMCP("driftwatch", log_level="WARNING")
 
     @server.tool(structured_output=False)
     @_structured

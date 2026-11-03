@@ -19,10 +19,7 @@ from app.services.model_service import (
 
 
 def _database_url() -> str:
-    return os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch",
-    )
+    return os.environ["DATABASE_URL"]
 
 
 @pytest.fixture(scope="session")

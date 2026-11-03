@@ -22,7 +22,6 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@db:5432/driftwatch
-      SECRET_KEY: ${SECRET_KEY:-local-development-only}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       REPORT_SCHEDULE_CRON: ${REPORT_SCHEDULE_CRON:-0 0 * * 1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

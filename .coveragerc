@@ -1,5 +1,3 @@
 [run]
-omit =
-    app/routers/*
-    app/main.py
-    app/database.py
+branch = True
+concurrency = greenlet,thread

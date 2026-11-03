@@ -6,7 +6,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -45,6 +45,7 @@ async def create_alert(
                 Alert.feature_name == feature_name,
                 Alert.window_date == window_date,
                 Alert.alert_type == alert_type,
+                Alert.superseded_at.is_(None),
             )
         )
         row = existing.scalar_one_or_none()
@@ -109,6 +110,22 @@ async def _dispatch_alert(alert: Alert) -> None:
         logger.exception("Alert webhook dispatch error for alert %s", alert.id)
 
 
+def _filter_alerts(query, model_id: UUID | None, resolved: bool):
+    if model_id is not None:
+        query = query.where(Alert.model_id == model_id)
+    if resolved:
+        return query.where(Alert.resolved_at.is_not(None))
+    return query.where(Alert.resolved_at.is_(None))
+
+
+async def count_alerts(
+    db: AsyncSession, model_id: UUID | None = None, resolved: bool = False
+) -> int:
+    """Count alerts across all pages, using the same filters as list_alerts."""
+    query = _filter_alerts(select(func.count()).select_from(Alert), model_id, resolved)
+    return int((await db.execute(query)).scalar_one())
+
+
 async def list_alerts(
     db: AsyncSession,
     model_id: UUID | None = None,
@@ -129,17 +146,12 @@ async def list_alerts(
             List of alert rows.
     """
     offset = (page - 1) * page_size
-    query = select(Alert)
-
-    if model_id is not None:
-        query = query.where(Alert.model_id == model_id)
-
-    if resolved:
-        query = query.where(Alert.resolved_at.is_not(None))
-    else:
-        query = query.where(Alert.resolved_at.is_(None))
-
-    query = query.order_by(Alert.created_at.desc()).offset(offset).limit(page_size)
+    query = (
+        _filter_alerts(select(Alert), model_id, resolved)
+        .order_by(Alert.created_at.desc(), Alert.id.desc())
+        .offset(offset)
+        .limit(page_size)
+    )
 
     result = await db.execute(query)
     return list(result.scalars().all())
@@ -158,12 +170,15 @@ async def resolve_alert(db: AsyncSession, alert_id: UUID) -> Alert:
     Raises:
             HTTPException: If alert is not found.
     """
-    result = await db.execute(select(Alert).where(Alert.id == alert_id))
+    result = await db.execute(
+        select(Alert).where(Alert.id == alert_id).with_for_update()
+    )
     alert = result.scalar_one_or_none()
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    alert.resolved_at = datetime.now(timezone.utc)
+    if alert.resolved_at is None:
+        alert.resolved_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(alert)
     return alert

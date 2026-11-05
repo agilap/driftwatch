@@ -394,3 +394,30 @@ def test_server_logging_keeps_warnings_but_drops_info():
     assert result.returncode == 0, result.stderr
     assert "quiet-info" not in result.stderr
     assert "loud-warning" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"), [("secret", "secret"), ("", None), (None, None)]
+)
+def test_main_sends_the_api_key_only_when_set(monkeypatch, key, expected):
+    from driftwatch_mcp import server as mcp_server
+
+    clients = []
+
+    class FakeServer:
+        def run(self, transport):
+            pass
+
+    def fake_build_server(client):
+        clients.append(client)
+        return FakeServer()
+
+    monkeypatch.setattr(mcp_server, "build_server", fake_build_server)
+    if key is None:
+        monkeypatch.delenv("DRIFTWATCH_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("DRIFTWATCH_API_KEY", key)
+
+    mcp_server.main()
+
+    assert clients[0].headers.get("X-API-Key") == expected

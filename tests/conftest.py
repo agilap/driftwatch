@@ -30,6 +30,8 @@ def _require_test_database() -> str:
 
 # Must run before any app import: app.config reads DATABASE_URL at import time.
 os.environ["DATABASE_URL"] = _require_test_database()
+# Tests opt in to auth; a developer's own key must not turn every request into a 401.
+os.environ["DRIFTWATCH_API_KEY"] = ""
 
 from app.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402

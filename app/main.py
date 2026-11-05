@@ -4,11 +4,12 @@ import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.auth import require_api_key
 from app.config import settings
 from app.database import check_database_readiness, engine
 from app.routers import alerts, drift, ingest, models, reports
@@ -25,6 +26,8 @@ logger = logging.getLogger("driftwatch")
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown lifecycle events."""
     logger.info("DriftWatch API starting up")
+    if not settings.api_key:
+        logger.warning("DRIFTWATCH_API_KEY is not set: API authentication is disabled")
     try:
         await asyncio.wait_for(check_database_readiness(), timeout=5.0)
         start_weekly_scheduler()
@@ -115,12 +118,13 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
     )
 
 
-app.include_router(models.router, prefix="/models")
-app.include_router(ingest.router, prefix="/ingest")
-app.include_router(ingest.model_importance_router)
-app.include_router(drift.router, prefix="/drift")
-app.include_router(reports.router, prefix="/reports")
-app.include_router(alerts.router, prefix="/alerts")
+protected = [Depends(require_api_key)]
+app.include_router(models.router, prefix="/models", dependencies=protected)
+app.include_router(ingest.router, prefix="/ingest", dependencies=protected)
+app.include_router(ingest.model_importance_router, dependencies=protected)
+app.include_router(drift.router, prefix="/drift", dependencies=protected)
+app.include_router(reports.router, prefix="/reports", dependencies=protected)
+app.include_router(alerts.router, prefix="/alerts", dependencies=protected)
 
 
 @app.get("/health")

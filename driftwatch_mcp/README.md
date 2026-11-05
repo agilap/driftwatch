@@ -22,6 +22,8 @@ The server speaks MCP over stdio. A client configuration, run from the repositor
 }
 ```
 
+If the API requires a key, add `DRIFTWATCH_API_KEY` to `env`.
+
 ## Why this lives in the main repository
 
 The earlier `driftwatch-mcp` repository duplicated the statistics and had already

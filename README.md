@@ -98,6 +98,10 @@ curl -fsS "http://localhost:8000/reports/$MODEL_ID/latest"
 
 The explicit analysis call also retries a failed background analysis. See `/docs` for all routes, including importances, snapshot retrieval, and alert resolution. The [Postman collection](examples/driftwatch.postman_collection.json) runs the whole flow in order: health, model creation (which saves `modelId`), reference, snapshot, analysis, drift, alerts, report generation, and latest report. Model names use a dynamic variable, so it can be rerun; try `npx newman run examples/driftwatch.postman_collection.json --env-var baseUrl=http://localhost:8000`.
 
+### Authentication
+
+Set `DRIFTWATCH_API_KEY` to require that key in an `X-API-Key` header on every route except `/health`, `/ready`, and the API docs; other requests return 401. Without it, authentication is off and startup logs a warning, so the local examples work unchanged. The MCP server, agent, and loan-risk demo send the key when `DRIFTWATCH_API_KEY` is in their environment; `make` and Compose pick up an exported value. In Postman, set the `apiKey` collection variable. Generate a key with `openssl rand -hex 32`.
+
 ### Replacement rules
 
 - **Snapshots:** posting to a date replaces that entire window. Batches are not accumulated, so a second same-day post discards the first, including any feature or predictions it omits. Features omitted from a window are not scored, and the weekly report counts only features that were analyzed, normalizing importance over them.
@@ -223,7 +227,7 @@ The CI workflow runs Ruff, Black, PostgreSQL-backed tests with coverage, and a C
 
 ## Limitations
 
-- There is no authentication or authorization. Do not expose this service publicly.
+- Authentication is one shared API key, off unless `DRIFTWATCH_API_KEY` is set. There are no users, roles, or per-model permissions, and the service does not terminate TLS, so put it behind HTTPS before exposing it.
 - Demo data is synthetic. There is no deployment or real-world monitoring claim.
 - Only numeric features can be ingested. `compute_chi_square` is tested but unused; categorical ingestion is absent.
 - There is no distributed queue, automatic crash recovery, or durable webhook outbox. Webhook delivery is best effort; the weekly scheduler runs in process.

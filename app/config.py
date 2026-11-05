@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     alert_webhook_url: str = Field("", alias="ALERT_WEBHOOK_URL")
     report_schedule_cron: str = Field("0 0 * * 1", alias="REPORT_SCHEDULE_CRON")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
+    api_key: str = Field("", alias="DRIFTWATCH_API_KEY")
     psi_yellow_threshold: float = Field(0.10, alias="PSI_YELLOW_THRESHOLD")
     psi_red_threshold: float = Field(0.20, alias="PSI_RED_THRESHOLD")
     ks_pvalue_threshold: float = Field(0.05, alias="KS_PVALUE_THRESHOLD")

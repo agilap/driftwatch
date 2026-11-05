@@ -19,7 +19,7 @@ demo: up
 	done; \
 	echo "API did not become ready"; docker compose logs api; exit 1
 	DRIFTWATCH_URL=$(BASE_URL) $(PYTHON) -m examples.loan_risk_demo.run_demo
-	@MODEL_ID=$$($(PYTHON) -c 'import httpx; from examples.loan_risk_demo.run_demo import model_id; print(model_id(httpx.Client(base_url="$(BASE_URL)")))') && \
+	@MODEL_ID=$$($(PYTHON) -c 'import httpx; from examples.loan_risk_demo.run_demo import api_headers, model_id; print(model_id(httpx.Client(base_url="$(BASE_URL)", headers=api_headers())))') && \
 	env -u DRIFTWATCH_LLM_BASE_URL -u DRIFTWATCH_LLM_MODEL -u DRIFTWATCH_LLM_API_KEY \
 		DRIFTWATCH_URL=$(BASE_URL) $(PYTHON) -m model_health_agent "$$MODEL_ID"
 

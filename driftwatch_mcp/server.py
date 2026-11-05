@@ -288,7 +288,9 @@ def build_server(client: httpx.AsyncClient) -> FastMCP:
 
 def main() -> None:
     base_url = os.environ.get("DRIFTWATCH_URL", "http://localhost:8000")
-    build_server(httpx.AsyncClient(base_url=base_url, timeout=30)).run(
+    key = os.environ.get("DRIFTWATCH_API_KEY")
+    headers = {"X-API-Key": key} if key else None
+    build_server(httpx.AsyncClient(base_url=base_url, headers=headers, timeout=30)).run(
         transport="stdio"
     )
 

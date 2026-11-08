@@ -14,11 +14,9 @@ class ToolError(Exception):
         super().__init__(message)
 
 
-def triage(state: dict) -> str:
+def triage(health: dict) -> str:
     return (
-        "investigate"
-        if state["health"]["status"] in ("critical", "attention")
-        else "summarize"
+        "investigate" if health["status"] in ("critical", "attention") else "summarize"
     )
 
 
@@ -43,20 +41,17 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
             )
         return result.structuredContent
 
-    async def collect(state: dict) -> dict:
-        return {
-            "health": await call("analyze_model_health", model_id=state["model_id"])
-        }
+    async def collect() -> dict:
+        return await call("analyze_model_health", model_id=model_id)
 
-    async def investigate(state: dict) -> dict:
-        health = state["health"]
+    async def investigate(health: dict, model_id: str) -> list:
         names = [row["feature_name"] for row in health["problem_features"][:3]]
         if health["prediction_severity"] not in (None, "green"):
             names.append(PREDICTIONS_FEATURE_NAME)
         findings = []
         for name in names:
             args = {
-                "model_id": state["model_id"],
+                "model_id": model_id,
                 "window_date": health["latest_window"],
             }
             drift = await call(
@@ -95,14 +90,13 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
                     ],
                 }
             )
-        return {"findings": findings}
+        return findings
 
-    async def report(state: dict) -> dict:
-        health = state["health"]
+    async def report(health: dict, findings: list) -> dict:
         status = health["status"]
         recommendations = []
         if status in ("critical", "attention"):
-            for finding in state["findings"]:
+            for finding in findings:
                 if finding["feature_name"] == PREDICTIONS_FEATURE_NAME:
                     continue
                 recommendations.append(
@@ -113,11 +107,7 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
             )
         if health["prediction_severity"] not in (None, "green"):
             prediction = next(
-                (
-                    f
-                    for f in state["findings"]
-                    if f["feature_name"] == PREDICTIONS_FEATURE_NAME
-                ),
+                (f for f in findings if f["feature_name"] == PREDICTIONS_FEATURE_NAME),
                 None,
             )
             direction = prediction["direction"] if prediction else None
@@ -137,30 +127,37 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
             )
         elif status == "healthy":
             recommendations.append("Continue monitoring.")
+        latest_snapshot = health["latest_snapshot"]
+        unscored_snapshot = (
+            latest_snapshot is not None and latest_snapshot != health["latest_window"]
+        )
+        if unscored_snapshot:
+            recommendations.append(
+                f"Retry analysis for {latest_snapshot}: POST /drift/{model_id}/{latest_snapshot}/analyze"
+            )
         result = {
             "model": health["model"],
             "status": status,
             "evidence": {
                 "window": health["latest_window"],
+                "latest_snapshot": latest_snapshot,
                 "severity_counts": health["severity_counts"],
                 "prediction_severity": health["prediction_severity"],
                 "overall_score": health["overall_score"],
                 "report_covers_latest_window": health["report_covers_latest_window"],
             },
-            "findings": state["findings"],
-            "stable_features": health["stable_features"],
+            "findings": findings,
+            "stable_features": [] if unscored_snapshot else health["stable_features"],
             "active_alerts": health["active_alerts"],
             "recommendations": recommendations,
             "limitations": health["limitations"],
             "mode": "offline",
             "narrative": None,
         }
-        return {"report": await (narrate or narrate_report)(result)}
+        return await (narrate or narrate_report)(result)
 
-    state = {"model_id": model_id}
-    state.update(await collect(state))
-    if triage(state) == "investigate":
-        state.update(await investigate(state))
-    else:
-        state["findings"] = []
-    return (await report(state))["report"]
+    health = await collect()
+    findings = (
+        await investigate(health, model_id) if triage(health) == "investigate" else []
+    )
+    return await report(health, findings)

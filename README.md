@@ -45,7 +45,7 @@ sequenceDiagram
     A-->>C: Return report
 ```
 
-Analysis runs in process after the snapshot response. Wait for analysis to finish before generating a report, or call the analysis endpoint explicitly. Reports select the highest PSI for each feature in the requested seven-day period and score those features.
+Analysis runs in process after the snapshot response. Wait for analysis to finish before generating a report, or call the analysis endpoint explicitly. Reports select the highest PSI for each feature in the requested seven-day period and score those features. Reports list days with snapshots but no scores in `unscored_windows`.
 
 ## Technology stack
 

@@ -12,6 +12,7 @@ from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
+from app.models.snapshot import Snapshot
 from app.services import importance_scorer
 
 
@@ -51,6 +52,7 @@ def _render_markdown_report(
     red_count: int,
     yellow_count: int,
     green_count: int,
+    unscored_windows: list[str] | None = None,
 ) -> str:
     """Render report markdown from prepared report components."""
     health_summary = (
@@ -72,6 +74,11 @@ def _render_markdown_report(
             f"{yellow_count} moderate, {green_count} stable."
         ),
         (recommendations[0] if recommendations else "No immediate actions required."),
+        *(
+            [f"Warning: snapshots have no scores for {', '.join(unscored_windows)}."]
+            if unscored_windows
+            else []
+        ),
         "",
         "## Feature Drift Summary",
         "| Feature | PSI | KS Statistic | JS Divergence | Weighted Score | Severity |",
@@ -145,6 +152,21 @@ async def generate_report(
     )
     rows = list(rows_result.scalars().all())
 
+    snapshot_dates_result = await db.execute(
+        select(Snapshot.window_date)
+        .where(
+            Snapshot.model_id == model_id,
+            Snapshot.window_date >= week_start,
+            Snapshot.window_date <= week_end,
+        )
+        .distinct()
+    )
+    scored_dates = {row.window_date for row in rows}
+    unscored_windows = [
+        day.isoformat()
+        for day in sorted(set(snapshot_dates_result.scalars().all()) - scored_dates)
+    ]
+
     worst_by_feature: dict[str, DriftScore] = {}
     for row in rows:
         current = worst_by_feature.get(row.feature_name)
@@ -194,7 +216,13 @@ async def generate_report(
     if output_drift is not None and output_drift > settings.psi_red_threshold:
         recommendations.append("Output distribution has significantly shifted")
 
+    for day in unscored_windows:
+        recommendations.append(
+            f"Retry analysis for {day}: POST /drift/{model_id}/{day}/analyze"
+        )
+
     report_json = {
+        "unscored_windows": unscored_windows,
         "executive_summary": {
             "features_monitored": len(ranked_features),
             "red": len(red_features),
@@ -226,6 +254,7 @@ async def generate_report(
         red_count=len(red_features),
         yellow_count=yellow_count,
         green_count=green_count,
+        unscored_windows=unscored_windows,
     )
 
     existing_result = await db.execute(

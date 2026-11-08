@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
+from app.models.snapshot import Snapshot
 from app.services.report_generator import compute_overall_health_score, generate_report
 
 
@@ -310,6 +311,7 @@ async def test_report_without_evidence_has_no_health(db_session: AsyncSession) -
     report = await generate_report(
         db_session, model.id, date(2026, 3, 16), date(2026, 3, 22)
     )
+    assert report.report_json["unscored_windows"] == []
     assert report.overall_score is None
     assert report.report_json["executive_summary"]["overall_score"] is None
     assert "No drift data available" in report.report_markdown
@@ -375,3 +377,53 @@ async def test_output_recommendation_uses_configured_threshold(
         "Output distribution has significantly shifted"
         not in report.report_json["recommendations"]
     )
+
+
+@pytest.mark.asyncio
+async def test_report_identifies_unscored_snapshot_days(
+    db_session: AsyncSession,
+) -> None:
+    model = await _create_model(db_session)
+    week_start, week_end = date(2026, 3, 16), date(2026, 3, 22)
+    for day in (
+        date(2026, 3, 15),
+        week_start,
+        date(2026, 3, 17),
+        week_end,
+        date(2026, 3, 23),
+    ):
+        db_session.add(
+            Snapshot(
+                model_id=model.id,
+                window_date=day,
+                feature_name="income",
+                distribution={},
+                stats={},
+            )
+        )
+    db_session.add(
+        DriftScore(
+            model_id=model.id,
+            window_date=date(2026, 3, 17),
+            feature_name="income",
+            ks_statistic=0.1,
+            ks_pvalue=0.04,
+            psi=0.1,
+            js_divergence=0.0,
+            weighted_score=0.0,
+            severity="green",
+        )
+    )
+    await db_session.commit()
+
+    report = await generate_report(db_session, model.id, week_start, week_end)
+
+    assert report.report_json["unscored_windows"] == ["2026-03-16", "2026-03-22"]
+    summary = report.report_markdown.split("## Feature Drift Summary")[0]
+    assert "Warning:" in summary
+    assert "2026-03-16" in summary and "2026-03-22" in summary
+    for day in report.report_json["unscored_windows"]:
+        assert (
+            f"Retry analysis for {day}: POST /drift/{model.id}/{day}/analyze"
+            in report.report_json["recommendations"]
+        )

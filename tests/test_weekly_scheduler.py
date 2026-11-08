@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import Mock
 
 import pytest
 import pytest_asyncio
@@ -14,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.config import Settings
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
@@ -24,7 +26,7 @@ from scheduler import weekly_report
 from scheduler.weekly_report import run_weekly_reports_job
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def run_migrations() -> None:
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
@@ -32,7 +34,7 @@ def run_migrations() -> None:
 
 
 @pytest_asyncio.fixture
-async def sessions(monkeypatch):
+async def sessions(monkeypatch, run_migrations):
     engine = create_async_engine(os.environ["DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
@@ -94,6 +96,38 @@ async def _scores(sessions) -> dict:
             )
         ).all()
     return {row.name: row.overall_score for row in rows}
+
+
+def test_default_cron_fires_on_monday() -> None:
+    default = Settings.model_fields["report_schedule_cron"].default
+    trigger = CronTrigger.from_crontab(default, timezone="UTC")
+    now = datetime(2026, 11, 8, 12, tzinfo=timezone.utc)
+    assert trigger.get_next_fire_time(None, now) == datetime(
+        2026, 11, 9, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_job_reports_previous_monday_through_sunday(
+    sessions, monkeypatch
+) -> None:
+    model = await _model(sessions, "fixed-clock")
+    clock = Mock()
+    clock.now.return_value = datetime(2026, 11, 9, tzinfo=timezone.utc)
+    monkeypatch.setattr(weekly_report, "datetime", clock)
+    calls = []
+
+    async def capture_report(**kwargs):
+        calls.append(kwargs)
+        return Mock(overall_score=None)
+
+    monkeypatch.setattr(weekly_report, "generate_report", capture_report)
+    await run_weekly_reports_job()
+
+    assert len(calls) == 1
+    assert calls[0]["model_id"] == model.id
+    assert calls[0]["week_start"] == date(2026, 11, 2)
+    assert calls[0]["week_end"] == date(2026, 11, 8)
 
 
 @pytest.mark.asyncio

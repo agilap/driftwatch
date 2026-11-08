@@ -11,7 +11,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
-from model_health_agent.graph import ToolError, investigate_model
+from model_health_agent.investigate import ToolError, investigate_model
 
 
 async def run(model_id):
@@ -50,6 +50,7 @@ def render_report(report):
         f"\nStatus: **{report['status']}**",
         "\n## Evidence\n",
         f"- Window: {evidence['window']}",
+        f"- Latest snapshot: {evidence['latest_snapshot'] if evidence['latest_snapshot'] is not None else 'not available'}",
         "- Severity counts: "
         + ", ".join(
             f"{name}: {count}" for name, count in evidence["severity_counts"].items()

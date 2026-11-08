@@ -12,7 +12,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from driftwatch_mcp.server import build_server
 from model_health_agent.__main__ import render_report
-from model_health_agent.graph import ToolError, investigate_model, mean_direction
+from model_health_agent.investigate import ToolError, investigate_model, mean_direction
 from model_health_agent.narration import _supported, narrate_report
 
 MODEL_ID = str(uuid4())
@@ -29,13 +29,13 @@ def row(name, severity, score=0.0):
     }
 
 
-def api(rows, calls, *, fail_reference=False, missing_mean=False):
+def api(rows, calls, *, fail_reference=False, missing_mean=False, snapshot=WINDOW):
     def handle(request):
         path = request.url.path
         calls.append(path)
         routes = {
             f"/models/{MODEL_ID}": {"id": MODEL_ID, "name": "test"},
-            f"/ingest/snapshots/{MODEL_ID}": [WINDOW],
+            f"/ingest/snapshots/{MODEL_ID}": [snapshot] if snapshot else [],
             f"/drift/{MODEL_ID}/latest": {"window_date": WINDOW},
             f"/drift/{MODEL_ID}/{WINDOW}": rows,
             f"/alerts/{MODEL_ID}": {
@@ -91,10 +91,20 @@ def api(rows, calls, *, fail_reference=False, missing_mean=False):
 
 
 async def run_agent(
-    rows, calls, *, fail_reference=False, repeat=False, missing_mean=False
+    rows,
+    calls,
+    *,
+    fail_reference=False,
+    repeat=False,
+    missing_mean=False,
+    snapshot=WINDOW,
 ):
     async with api(
-        rows, calls, fail_reference=fail_reference, missing_mean=missing_mean
+        rows,
+        calls,
+        fail_reference=fail_reference,
+        missing_mean=missing_mean,
+        snapshot=snapshot,
     ) as client:
         server = build_server(client)
         async with create_connected_server_and_client_session(
@@ -305,6 +315,7 @@ def test_render_report():
         "status": "critical",
         "evidence": {
             "window": WINDOW,
+            "latest_snapshot": None,
             "severity_counts": {"red": 1, "yellow": 0, "green": 2},
             "prediction_severity": "red",
             "overall_score": 16.092416981516312,
@@ -329,6 +340,7 @@ def test_render_report():
     }
     output = render_report(report)
     assert "- Window: 2026-01-07" in output
+    assert "- Latest snapshot: not available" in output
     assert "- Severity counts: red: 1, yellow: 0, green: 2" in output
     assert "- Prediction severity: red" in output
     assert "- Overall score: 16.1" in output
@@ -381,3 +393,24 @@ def test_mean_direction(direction, expected):
 def test_supported_skips_unroundable_evidence():
     assert _supported("score 0.50", {"big": 1e30, "a": 0.5})
     assert not _supported("score 0.51", {"big": 1e30, "a": 0.5})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot", [WINDOW, "2026-01-08"])
+async def test_latest_snapshot_evidence_and_unscored_recommendation(snapshot):
+    report = await run_agent([row("stable", "green")], [], snapshot=snapshot)
+    assert report["status"] == ("healthy" if snapshot == WINDOW else "unknown")
+    assert report["evidence"]["latest_snapshot"] == snapshot
+    assert f"- Latest snapshot: {snapshot}" in render_report(report)
+    retry = f"Retry analysis for {snapshot}: POST /drift/{MODEL_ID}/{snapshot}/analyze"
+    if snapshot == WINDOW:
+        assert "Continue monitoring." in report["recommendations"]
+        assert report["stable_features"] == ["stable"]
+        assert retry not in report["recommendations"]
+    else:
+        assert (
+            "Investigate missing severity evidence; no health conclusion can be drawn."
+            in report["recommendations"]
+        )
+        assert report["stable_features"] == []
+        assert retry in report["recommendations"]

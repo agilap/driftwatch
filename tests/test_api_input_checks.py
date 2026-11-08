@@ -13,7 +13,7 @@ from app.schemas.model import ModelCreate
 def test_httpx_logging_hides_webhook_urls():
     import app.main  # noqa: F401
 
-    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpx").level == logging.WARNING
 
 
 def test_name_length_boundaries():

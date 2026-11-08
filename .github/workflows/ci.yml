@@ -41,7 +41,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch_test
       ALERT_WEBHOOK_URL: ""
-      REPORT_SCHEDULE_CRON: "0 0 * * 1"
+      REPORT_SCHEDULE_CRON: "0 0 * * mon"
       LOG_LEVEL: INFO
       PSI_YELLOW_THRESHOLD: "0.10"
       PSI_RED_THRESHOLD: "0.20"

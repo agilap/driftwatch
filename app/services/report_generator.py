@@ -285,8 +285,9 @@ async def generate_report(
         existing.generated_at = now
         report = existing
 
-    await db.commit()
+    await db.flush()
     await db.refresh(report)
+    await db.commit()
     return report
 
 

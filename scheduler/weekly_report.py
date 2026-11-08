@@ -18,10 +18,10 @@ weekly_scheduler = AsyncIOScheduler(timezone="UTC")
 
 
 async def run_weekly_reports_job() -> None:
-    """Generate weekly reports for all models for the previous 7-day window."""
+    """Generate reports for all models for the last complete UTC Monday–Sunday week."""
     today_utc = datetime.now(timezone.utc).date()
-    week_end = today_utc - timedelta(days=1)
-    week_start = week_end - timedelta(days=6)
+    week_start = today_utc - timedelta(days=today_utc.weekday() + 7)
+    week_end = week_start + timedelta(days=6)
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(

@@ -54,7 +54,8 @@ async def sessions(monkeypatch, run_migrations):
 
 async def _model(sessions, name: str, with_window: bool = False) -> ModelRegistry:
     values = [1.0, 2.0, 3.0, 4.0] * 50
-    window = datetime.now(timezone.utc).date() - timedelta(days=1)
+    today = datetime.now(timezone.utc).date()
+    window = today - timedelta(days=today.weekday() + 1)
     async with sessions() as session:
         model = ModelRegistry(name=name)
         session.add(model)
@@ -108,12 +109,13 @@ def test_default_cron_fires_on_monday() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("day", [9, 11, 15])
 async def test_job_reports_previous_monday_through_sunday(
-    sessions, monkeypatch
+    sessions, monkeypatch, day
 ) -> None:
     model = await _model(sessions, "fixed-clock")
     clock = Mock()
-    clock.now.return_value = datetime(2026, 11, 9, tzinfo=timezone.utc)
+    clock.now.return_value = datetime(2026, 11, day, tzinfo=timezone.utc)
     monkeypatch.setattr(weekly_report, "datetime", clock)
     calls = []
 

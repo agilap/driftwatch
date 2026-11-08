@@ -251,10 +251,10 @@ async def upsert_importances(
     check_importance_coverage(features - {PREDICTIONS_FEATURE_NAME}, importances)
     persisted = await replace_importances(db, model_id, importances, method)
 
-    await db.commit()
-
+    await db.flush()
     for row in persisted:
         await db.refresh(row)
+    await db.commit()
 
     persisted.sort(key=lambda row: row.feature_name)
     return persisted

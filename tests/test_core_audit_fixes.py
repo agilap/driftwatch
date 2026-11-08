@@ -11,7 +11,12 @@ from app.config import Settings
 from app.schemas.ingest import SnapshotPayload
 from app.services.report_generator import _render_markdown_report
 from app.services.snapshot_service import ingest_snapshot
-from tests.test_reliability_fixes import ctx, _model, _reference  # noqa: F401
+from tests.test_reliability_fixes import (
+    ctx,  # noqa: F401
+    _model,
+    _reference,
+    run_migrations,  # noqa: F401
+)
 
 
 def test_psi_threshold_settings() -> None:

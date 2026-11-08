@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.drift_score import DriftScore
@@ -427,3 +427,32 @@ async def test_report_identifies_unscored_snapshot_days(
             f"Retry analysis for {day}: POST /drift/{model.id}/{day}/analyze"
             in report.report_json["recommendations"]
         )
+
+
+@pytest.mark.asyncio
+async def test_generate_report_returns_after_concurrent_deletion(
+    db_session: AsyncSession, monkeypatch
+) -> None:
+    model = await _create_model(db_session)
+    original_commit = db_session.commit
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    deleted_ids = []
+
+    async def commit_and_delete() -> None:
+        await original_commit()
+        async with session_factory() as other_session:
+            result = await other_session.execute(
+                delete(HealthReport)
+                .where(HealthReport.model_id == model.id)
+                .returning(HealthReport.id)
+            )
+            deleted_ids.extend(result.scalars().all())
+            await other_session.commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_and_delete)
+    report = await generate_report(
+        db_session, model.id, date(2026, 3, 16), date(2026, 3, 22)
+    )
+
+    assert deleted_ids == [report.id]
+    assert report.id is not None

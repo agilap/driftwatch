@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import math
 from typing import Literal
 from uuid import UUID
@@ -133,6 +133,8 @@ class SnapshotPayload(BaseModel):
         if value.tzinfo is None or value.utcoffset() != timedelta(0):
             msg = "timestamp must be UTC"
             raise ValueError(msg)
+        if value > datetime.now(timezone.utc) + timedelta(days=1):
+            raise ValueError("timestamp must not be more than one day in the future")
         return value
 
 

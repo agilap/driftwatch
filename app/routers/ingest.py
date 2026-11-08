@@ -116,15 +116,7 @@ async def get_snapshot_window_endpoint(
         raise HTTPException(status_code=404, detail="Model not found")
 
     rows = await get_snapshot_window(db=db, model_id=model_id, window_date=window_date)
-    return [
-        SnapshotFeatureResponse(
-            feature_name=row.feature_name,
-            stats=row.stats,
-            distribution=row.distribution,
-            sample_count=row.sample_count,
-        )
-        for row in rows
-    ]
+    return [SnapshotFeatureResponse.model_validate(row) for row in rows]
 
 
 @model_importance_router.post(
@@ -140,13 +132,7 @@ async def upload_model_importances_endpoint(
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    try:
-        normalized = importance_scorer.import_from_json(
-            json_data=payload.importances,
-            method=payload.method,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    normalized = importance_scorer.normalise_importances(payload.importances)
 
     rows = await importance_scorer.upsert_importances(
         db=db,
@@ -155,12 +141,5 @@ async def upload_model_importances_endpoint(
         method=payload.method,
     )
 
-    items = [
-        StoredImportanceResponse(
-            feature_name=row.feature_name,
-            importance=row.importance,
-            method=row.method,
-        )
-        for row in rows
-    ]
+    items = [StoredImportanceResponse.model_validate(row) for row in rows]
     return ImportanceUploadResponse(model_id=model_id, items=items, total=len(items))

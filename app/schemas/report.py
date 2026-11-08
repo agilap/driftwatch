@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HealthReportResponse(BaseModel):
     """Serialized health report row."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     model_id: UUID
@@ -29,4 +31,4 @@ class ReportListResponse(BaseModel):
 class ReportGenerateRequest(BaseModel):
     """Manual report generation request payload."""
 
-    week_start: date
+    week_start: date = Field(le=date.max - timedelta(days=6))

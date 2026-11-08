@@ -50,6 +50,7 @@ def _analysis_session(mismatched=False, small_samples=False):
         _result(rows=snapshots),
         _result(),
         _result(),
+        _result(),  # deletes reports covering the window after inserting scores
     ]
     return model_id, session
 

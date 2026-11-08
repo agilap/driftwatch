@@ -220,7 +220,6 @@ async def test_full_pipeline_ingest_january_snapshot(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["drift_triggered"] is True
     assert set(body["features_recorded"]) == {
         "income",
         "credit_score",

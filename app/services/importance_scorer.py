@@ -13,8 +13,6 @@ from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 
-ALLOWED_METHODS = {"shap", "coefficient", "manual"}
-
 
 async def load_importances(db: AsyncSession, model_id: UUID) -> dict[str, float]:
     """Load stored feature importances for a model.
@@ -162,41 +160,6 @@ def rank_features_by_weighted_score(
         row["rank"] = index
 
     return ranked
-
-
-def import_from_json(json_data: dict, method: str) -> dict[str, float]:
-    """Validate and normalize feature importances from JSON input.
-
-    Args:
-            json_data: Raw mapping of feature_name to importance value.
-            method: Importance extraction method.
-
-    Returns:
-            Normalized importances.
-
-    Raises:
-            ValueError: If method is invalid or importances are malformed.
-    """
-    if method not in ALLOWED_METHODS:
-        msg = "method must be one of: shap, coefficient, manual"
-        raise ValueError(msg)
-
-    if not json_data:
-        msg = "importances payload cannot be empty"
-        raise ValueError(msg)
-
-    parsed: dict[str, float] = {}
-    for feature_name, value in json_data.items():
-        if not isinstance(value, (int, float)):
-            msg = f"importance for feature '{feature_name}' must be numeric"
-            raise ValueError(msg)
-        numeric = float(value)
-        if not np.isfinite(numeric) or numeric < 0:
-            msg = f"importance for feature '{feature_name}' must be non-negative"
-            raise ValueError(msg)
-        parsed[str(feature_name)] = numeric
-
-    return normalise_importances(parsed)
 
 
 def check_importance_coverage(features: set[str], importances: dict) -> None:

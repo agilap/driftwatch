@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +10,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -92,6 +94,19 @@ async def _scores(sessions) -> dict:
             )
         ).all()
     return {row.name: row.overall_score for row in rows}
+
+
+@pytest.mark.asyncio
+async def test_start_weekly_scheduler_registers_job() -> None:
+    try:
+        weekly_report.start_weekly_scheduler()
+        job = weekly_report.weekly_scheduler.get_job("weekly-health-report")
+        assert job is not None
+        assert job.misfire_grace_time is None
+        assert isinstance(job.trigger, CronTrigger)
+    finally:
+        weekly_report.stop_weekly_scheduler()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,8 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
@@ -79,7 +81,7 @@ def _render_markdown_report(
     for row in ranked_rows:
         lines.append(
             "| {feature} | {psi:.3f} | {ks:.3f} | {js:.3f} | {weighted:.3f} | {severity} |".format(
-                feature=row["feature_name"],
+                feature=row["feature_name"].replace("|", "\\|"),
                 psi=float(row.get("psi", 0.0)),
                 ks=float(row["ks_statistic"]),
                 js=float(row.get("js_divergence", 0.0)),
@@ -130,8 +132,7 @@ async def generate_report(
     model_result = await db.execute(
         select(ModelRegistry).where(ModelRegistry.id == model_id).with_for_update()
     )
-    model = model_result.scalar_one_or_none()
-    model_name = model.name if model is not None else str(model_id)
+    model_name = model_result.scalar_one().name
 
     rows_result = await db.execute(
         select(DriftScore)
@@ -152,7 +153,7 @@ async def generate_report(
         if row_psi > current_psi:
             worst_by_feature[row.feature_name] = row
 
-    output_row = worst_by_feature.pop("__predictions__", None)
+    output_row = worst_by_feature.pop(PREDICTIONS_FEATURE_NAME, None)
     output_drift = (
         float(output_row.psi) if output_row and output_row.psi is not None else None
     )
@@ -190,7 +191,7 @@ async def generate_report(
         )
     for row in red_features:
         recommendations.append(f"Investigate {row['feature_name']} immediately")
-    if output_drift is not None and output_drift > 0.20:
+    if output_drift is not None and output_drift > settings.psi_red_threshold:
         recommendations.append("Output distribution has significantly shifted")
 
     report_json = {

@@ -21,20 +21,6 @@ from app.services.report_generator import (
 router = APIRouter(tags=["reports"])
 
 
-def _to_response(report: object) -> HealthReportResponse:
-    """Convert health report ORM row to schema response."""
-    return HealthReportResponse(
-        id=report.id,
-        model_id=report.model_id,
-        week_start=report.week_start,
-        week_end=report.week_end,
-        overall_score=report.overall_score,
-        report_json=report.report_json,
-        report_markdown=report.report_markdown,
-        generated_at=report.generated_at,
-    )
-
-
 @router.get("/{model_id}", response_model=ReportListResponse)
 async def list_reports_endpoint(
     model_id: UUID,
@@ -46,7 +32,7 @@ async def list_reports_endpoint(
         raise HTTPException(status_code=404, detail="Model not found")
 
     rows = await list_reports_for_model(db=db, model_id=model_id)
-    items = [_to_response(row) for row in rows]
+    items = [HealthReportResponse.model_validate(row) for row in rows]
     return ReportListResponse(items=items, total=len(items))
 
 
@@ -63,7 +49,7 @@ async def latest_report_endpoint(
     row = await get_latest_report_for_model(db=db, model_id=model_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No reports found for model")
-    return _to_response(row)
+    return HealthReportResponse.model_validate(row)
 
 
 @router.get("/{model_id}/{week_start}", response_model=HealthReportResponse)
@@ -80,7 +66,7 @@ async def get_report_week_endpoint(
     row = await get_report_for_week(db=db, model_id=model_id, week_start=week_start)
     if row is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    return _to_response(row)
+    return HealthReportResponse.model_validate(row)
 
 
 @router.post("/{model_id}/generate", response_model=HealthReportResponse)
@@ -99,4 +85,4 @@ async def generate_report_endpoint(
     report = await generate_report(
         db=db, model_id=model_id, week_start=week_start, week_end=week_end
     )
-    return _to_response(report)
+    return HealthReportResponse.model_validate(report)

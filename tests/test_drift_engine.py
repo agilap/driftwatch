@@ -19,8 +19,6 @@ from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services.drift_engine import (
     classify_severity,
-    compute_js_divergence,
-    compute_ks_test,
     compute_psi,
     run_drift_analysis,
 )
@@ -55,45 +53,6 @@ def test_compute_psi_extreme_shift_is_uncapped() -> None:
     psi = compute_psi(reference, production, bins=1)
     assert psi == pytest.approx(2 * np.log(10001) / 1.0003)
     assert psi > 1.0
-
-
-def test_compute_ks_test_significant() -> None:
-    rng = np.random.default_rng(7)
-    reference = rng.normal(0.0, 1.0, 2000)
-    production = rng.normal(3.0, 1.0, 2000)
-
-    result = compute_ks_test(reference, production)
-
-    assert result["significant"] is True
-    assert float(result["pvalue"]) < 0.05
-
-
-def test_compute_ks_test_not_significant() -> None:
-    rng = np.random.default_rng(11)
-    reference = rng.normal(0.0, 1.0, 2000)
-    production = rng.normal(0.0, 1.0, 2000)
-
-    result = compute_ks_test(reference, production)
-
-    assert result["significant"] is False
-
-
-def test_compute_js_divergence_identical() -> None:
-    values = np.linspace(-2.0, 2.0, 1000)
-
-    js = compute_js_divergence(values, values)
-
-    assert js == pytest.approx(0.0, abs=1e-9)
-
-
-def test_compute_js_divergence_different() -> None:
-    rng = np.random.default_rng(13)
-    reference = rng.normal(0.0, 1.0, 4000)
-    production = rng.normal(2.5, 1.0, 4000)
-
-    js = compute_js_divergence(reference, production)
-
-    assert 0.0 < js <= 1.0
 
 
 def test_classify_severity_all_bands() -> None:

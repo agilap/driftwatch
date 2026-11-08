@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, timezone
 from uuid import UUID
@@ -8,12 +9,12 @@ import numpy as np
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from scipy.spatial.distance import jensenshannon
-from scipy.stats import chi2_contingency, ks_2samp
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.drift_score import DriftScore
+from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
@@ -126,60 +127,11 @@ def _sample_histogram_counts(
     )
 
 
-def compute_ks_test(
-    reference: np.ndarray, production: np.ndarray
-) -> dict[str, float | bool]:
-    """Compute two-sample Kolmogorov-Smirnov test.
-
-    Args:
-        reference: Reference (training) sample array.
-        production: Production sample array.
-
-    Returns:
-        Dictionary with KS statistic, p-value, and significance flag.
-    """
-    ref, prod = _validate_inputs(reference, production)
-    result = ks_2samp(ref, prod)
-    pvalue = float(result.pvalue)
-    return {
-        "statistic": float(result.statistic),
-        "pvalue": pvalue,
-        "significant": pvalue < settings.ks_pvalue_threshold,
-    }
-
-
 def compute_psi(reference: np.ndarray, production: np.ndarray, bins: int = 10) -> float:
     """Compute uncapped PSI from samples using shared reference bins."""
     return compute_psi_from_counts(
         *_sample_histogram_counts(reference, production, bins)
     )
-
-
-def compute_js_divergence(
-    reference: np.ndarray, production: np.ndarray, bins: int = 10
-) -> float:
-    """Compute base-2 Jensen-Shannon divergence from shared sample histograms."""
-    return compute_js_divergence_from_counts(
-        *_sample_histogram_counts(reference, production, bins)
-    )
-
-
-def compute_chi_square(
-    reference: np.ndarray, production: np.ndarray
-) -> dict[str, float | bool]:
-    """Compare aligned category count vectors with a contingency-table test."""
-    ref, prod = _validate_counts(reference, production)
-    table = np.asarray([ref, prod])
-    table = table[:, np.any(table > 0, axis=0)]
-    if table.shape[1] == 1:
-        return {"statistic": 0.0, "pvalue": 1.0, "significant": False}
-    result = chi2_contingency(table)
-    pvalue = float(result.pvalue)
-    return {
-        "statistic": float(result.statistic),
-        "pvalue": pvalue,
-        "significant": pvalue < settings.ks_pvalue_threshold,
-    }
 
 
 def classify_severity(psi: float) -> str:
@@ -306,6 +258,7 @@ async def run_drift_analysis(
     results: list[DriftScoreResult] = []
     severity_counts = {"red": 0, "yellow": 0, "green": 0}
     new_alerts = []
+    inserted_score = False
 
     for feature_name in shared_features:
         reference_histogram = reference_by_feature[feature_name].distribution
@@ -349,6 +302,7 @@ async def run_drift_analysis(
         existing = existing_result.scalar_one_or_none()
 
         if existing is None:
+            inserted_score = True
             db.add(
                 DriftScore(
                     model_id=model_id,
@@ -414,11 +368,22 @@ async def run_drift_analysis(
             )
         )
 
+    if inserted_score:
+        await db.execute(
+            delete(HealthReport).where(
+                HealthReport.model_id == model_id,
+                HealthReport.week_start <= window_date,
+                HealthReport.week_end >= window_date,
+            )
+        )
     await db.commit()
     for alert in new_alerts:
         await db.refresh(alert)
-        await alert_service._dispatch_alert(alert)
         alert._dispatch_pending = False
+    if new_alerts:
+        # End the refresh transaction so a slow webhook holds no database connection.
+        await db.commit()
+        await asyncio.gather(*map(alert_service._dispatch_alert, new_alerts))
 
     logger.info(
         "Drift analysis complete for model=%s window=%s features=%d red=%d yellow=%d green=%d",

@@ -5,7 +5,6 @@ import pytest
 from app.services.importance_scorer import (
     compute_weighted_score,
     equal_weight_importances,
-    import_from_json,
     normalise_importances,
     rank_features_by_weighted_score,
     resolve_feature_weights,
@@ -71,24 +70,6 @@ def test_rank_features_sorted_descending() -> None:
         >= ranked[2]["weighted_score"]
     )
     assert ranked[0]["feature_name"] == "income"
-
-
-def test_import_from_json_valid() -> None:
-    parsed = import_from_json(
-        json_data={"income": 2, "credit_score": 1.0, "age": 1.0},
-        method="manual",
-    )
-
-    assert sum(parsed.values()) == pytest.approx(1.0)
-    assert parsed["income"] == pytest.approx(0.5)
-
-
-def test_import_from_json_invalid_raises() -> None:
-    with pytest.raises(ValueError):
-        import_from_json(
-            json_data={"income": "bad", "credit_score": 1.0},
-            method="shap",
-        )
 
 
 @pytest.mark.parametrize(

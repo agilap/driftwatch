@@ -10,6 +10,7 @@ from uuid import UUID
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from model_health_agent.graph import ToolError, build_graph
 
 
@@ -64,7 +65,7 @@ def render_report(report):
         drift = finding["drift"]
         name = (
             "Model predictions"
-            if finding["feature_name"] == "__predictions__"
+            if finding["feature_name"] == PREDICTIONS_FEATURE_NAME
             else finding["feature_name"]
         )
         count = len(finding["alerts"])

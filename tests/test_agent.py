@@ -38,7 +38,23 @@ def api(rows, calls, *, fail_reference=False, missing_mean=False):
             f"/drift/{MODEL_ID}/latest": {"window_date": WINDOW},
             f"/drift/{MODEL_ID}/{WINDOW}": rows,
             f"/alerts/{MODEL_ID}": {
-                "items": [{"feature_name": "first", "message": "alert"}],
+                "items": [
+                    {
+                        "feature_name": "first",
+                        "message": "alert",
+                        "window_date": WINDOW,
+                    },
+                    {
+                        "feature_name": "first",
+                        "message": "old",
+                        "window_date": "2026-01-06",
+                    },
+                    {
+                        "feature_name": "first",
+                        "message": "older",
+                        "window_date": "2026-01-05",
+                    },
+                ],
                 "total": 1,
             },
             f"/ingest/reference/{MODEL_ID}": {
@@ -138,7 +154,7 @@ async def test_rank_limit_directions_and_determinism():
     assert report["findings"][0]["reference_mean"] == 10
     assert report["findings"][0]["window_mean"] == 12
     assert report["findings"][0]["alerts"] == [
-        {"feature_name": "first", "message": "alert"}
+        {"feature_name": "first", "message": "alert", "window_date": WINDOW}
     ]
     assert report["findings"][1]["alerts"] == []
     assert calls.count(f"/ingest/reference/{MODEL_ID}") == 6

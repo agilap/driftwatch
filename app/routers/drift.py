@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.drift import DriftScoreResponse, FeatureDriftSummary, ModelDriftSummary
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.services.drift_engine import (
     DriftScoreResult,
     get_drift_scores_for_window,
@@ -56,6 +57,9 @@ async def get_latest_drift_window_endpoint(
             )
         )
 
+        if row.feature_name == PREDICTIONS_FEATURE_NAME:
+            continue
+
         if severity == "red":
             red_count += 1
         elif severity == "yellow":
@@ -87,22 +91,7 @@ async def get_drift_window_endpoint(
     rows = await get_drift_scores_for_window(
         db=db, model_id=model_id, window_date=window_date
     )
-    return [
-        DriftScoreResponse(
-            id=row.id,
-            model_id=row.model_id,
-            window_date=row.window_date,
-            feature_name=row.feature_name,
-            ks_statistic=row.ks_statistic,
-            ks_pvalue=row.ks_pvalue,
-            psi=row.psi,
-            js_divergence=row.js_divergence,
-            weighted_score=row.weighted_score,
-            severity=row.severity,
-            computed_at=row.computed_at,
-        )
-        for row in rows
-    ]
+    return [DriftScoreResponse.model_validate(row) for row in rows]
 
 
 @router.post("/{model_id}/{window_date}/analyze", response_model=list[DriftScoreResult])

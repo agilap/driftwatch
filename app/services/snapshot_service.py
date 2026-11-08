@@ -72,18 +72,14 @@ async def ingest_snapshot(
         feature_batches[PREDICTIONS_FEATURE_NAME] = payload.predictions
 
     # Validate the whole batch before changing any ORM rows.
-    summaries = {}
-    for feature_name, values in feature_batches.items():
-        if not values:
-            raise HTTPException(
-                status_code=422, detail=f"Feature '{feature_name}' has no values"
-            )
-        reference = references.get(feature_name)
-        summaries[feature_name] = summarize_feature(
+    summaries = {
+        feature_name: summarize_feature(
             feature_name,
             values,
-            bin_edges=reference.distribution["bin_edges"] if reference else None,
+            bin_edges=references[feature_name].distribution["bin_edges"],
         )
+        for feature_name, values in feature_batches.items()
+    }
 
     # A re-post replaces the whole window, so absent features leave it.
     removed = await db.execute(
@@ -168,7 +164,6 @@ async def ingest_snapshot(
         window_date=window_date,
         features_recorded=sorted(features_recorded),
         sample_count=sample_count,
-        drift_triggered=True,
         recorded_at=datetime.now(timezone.utc),
     )
 

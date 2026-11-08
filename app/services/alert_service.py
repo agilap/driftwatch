@@ -86,6 +86,7 @@ async def _dispatch_alert(alert: Alert) -> None:
     payload = {
         "alert_id": str(alert.id),
         "model_id": str(alert.model_id),
+        "window_date": alert.window_date.isoformat() if alert.window_date else None,
         "feature_name": alert.feature_name,
         "alert_type": alert.alert_type,
         "severity": alert.severity,

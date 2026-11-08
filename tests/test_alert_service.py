@@ -141,6 +141,7 @@ async def test_dispatch_webhook_called_when_url_configured(
     alert = Alert(
         model_id=model_id,
         feature_name="income",
+        window_date=date(2026, 3, 27),
         alert_type="drift_red",
         severity="red",
         message="Drift",
@@ -157,6 +158,7 @@ async def test_dispatch_webhook_called_when_url_configured(
             await _dispatch_alert(alert)
 
     post_mock.assert_awaited_once()
+    assert post_mock.await_args.kwargs["json"]["window_date"] == "2026-03-27"
 
 
 @pytest.mark.asyncio

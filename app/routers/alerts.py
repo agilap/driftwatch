@@ -11,6 +11,18 @@ from app.services.model_service import get_model
 router = APIRouter(tags=["alerts"])
 
 
+async def _list_alerts_response(
+    db: AsyncSession, model_id: UUID | None, resolved: bool, page: int, page_size: int
+) -> AlertListResponse:
+    rows = await list_alerts(
+        db=db, model_id=model_id, resolved=resolved, page=page, page_size=page_size
+    )
+    total = await count_alerts(db=db, model_id=model_id, resolved=resolved)
+    return AlertListResponse(
+        items=[AlertResponse.model_validate(row) for row in rows], total=total
+    )
+
+
 @router.get("", response_model=AlertListResponse)
 async def list_active_alerts_endpoint(
     model_id: UUID | None = Query(None),
@@ -20,28 +32,7 @@ async def list_active_alerts_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> AlertListResponse:
     """List alerts, unresolved by default, with optional model filtering."""
-    rows = await list_alerts(
-        db=db,
-        model_id=model_id,
-        resolved=resolved,
-        page=page,
-        page_size=page_size,
-    )
-    items = [
-        AlertResponse(
-            id=row.id,
-            model_id=row.model_id,
-            feature_name=row.feature_name,
-            alert_type=row.alert_type,
-            severity=row.severity,
-            message=row.message,
-            resolved_at=row.resolved_at,
-            created_at=row.created_at,
-        )
-        for row in rows
-    ]
-    total = await count_alerts(db=db, model_id=model_id, resolved=resolved)
-    return AlertListResponse(items=items, total=total)
+    return await _list_alerts_response(db, model_id, resolved, page, page_size)
 
 
 @router.get("/{model_id}", response_model=AlertListResponse)
@@ -57,28 +48,7 @@ async def list_model_alerts_endpoint(
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    rows = await list_alerts(
-        db=db,
-        model_id=model_id,
-        resolved=resolved,
-        page=page,
-        page_size=page_size,
-    )
-    items = [
-        AlertResponse(
-            id=row.id,
-            model_id=row.model_id,
-            feature_name=row.feature_name,
-            alert_type=row.alert_type,
-            severity=row.severity,
-            message=row.message,
-            resolved_at=row.resolved_at,
-            created_at=row.created_at,
-        )
-        for row in rows
-    ]
-    total = await count_alerts(db=db, model_id=model_id, resolved=resolved)
-    return AlertListResponse(items=items, total=total)
+    return await _list_alerts_response(db, model_id, resolved, page, page_size)
 
 
 @router.patch("/{alert_id}/resolve", response_model=AlertResponse)
@@ -88,13 +58,4 @@ async def resolve_alert_endpoint(
 ) -> AlertResponse:
     """Mark an alert as resolved."""
     row = await resolve_alert(db=db, alert_id=alert_id)
-    return AlertResponse(
-        id=row.id,
-        model_id=row.model_id,
-        feature_name=row.feature_name,
-        alert_type=row.alert_type,
-        severity=row.severity,
-        message=row.message,
-        resolved_at=row.resolved_at,
-        created_at=row.created_at,
-    )
+    return AlertResponse.model_validate(row)

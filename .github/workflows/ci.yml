@@ -16,7 +16,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
       - name: Ruff
         run: ruff check .
       - name: Black
@@ -45,7 +45,6 @@ jobs:
       LOG_LEVEL: INFO
       PSI_YELLOW_THRESHOLD: "0.10"
       PSI_RED_THRESHOLD: "0.20"
-      KS_PVALUE_THRESHOLD: "0.05"
       MIN_SAMPLE_WARNING: "200"
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +53,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install dependencies
-        run: pip install -r requirements-demo.txt -r requirements-agent.txt
+        run: pip install -r requirements-demo.txt -r requirements-agent.txt -r requirements-dev.txt
       - name: Pytest
         run: pytest tests/ -v --cov=app --cov=scheduler --cov=driftwatch_mcp --cov=model_health_agent --cov-report=term-missing
 

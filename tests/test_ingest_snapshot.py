@@ -110,7 +110,6 @@ async def test_ingest_snapshot_success(
     assert body["window_date"] == "2026-03-26"
     assert set(body["features_recorded"]) == {"income", "credit_score"}
     assert body["sample_count"] == 3
-    assert body["drift_triggered"] is True
 
     async with session_factory() as session:
         result = await session.execute(

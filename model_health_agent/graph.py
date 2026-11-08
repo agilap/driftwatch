@@ -100,6 +100,7 @@ def build_graph(session, narrate=None):
                         a
                         for a in health["active_alerts"]
                         if a.get("feature_name") == name
+                        and a.get("window_date") == health["latest_window"]
                     ],
                 }
             )

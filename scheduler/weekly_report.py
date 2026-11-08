@@ -59,6 +59,8 @@ def start_weekly_scheduler() -> None:
         trigger=trigger,
         id="weekly-health-report",
         replace_existing=True,
+        # Run missed weekly reports even after a long sleep or outage.
+        misfire_grace_time=None,
     )
     weekly_scheduler.start()
 

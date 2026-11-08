@@ -349,3 +349,29 @@ async def test_report_health_endpoints_and_null_pvalue(
     )
     assert "0.375" in report.report_markdown
     assert "KS p-value" not in report.report_markdown
+
+
+@pytest.mark.asyncio
+async def test_output_recommendation_uses_configured_threshold(
+    db_session: AsyncSession, monkeypatch
+) -> None:
+    from app.config import settings
+    from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
+
+    monkeypatch.setattr(settings, "psi_red_threshold", 0.3)
+    model = await _create_model(db_session)
+    week_start = date(2026, 3, 16)
+    await _insert_week_drift(
+        db_session,
+        model.id,
+        week_start,
+        [{"feature_name": PREDICTIONS_FEATURE_NAME, "psi": 0.25, "severity": "yellow"}],
+    )
+    report = await generate_report(db_session, model.id, week_start, date(2026, 3, 22))
+    assert report.report_json["output_distribution"][
+        "output_drift_psi"
+    ] == pytest.approx(0.25)
+    assert (
+        "Output distribution has significantly shifted"
+        not in report.report_json["recommendations"]
+    )

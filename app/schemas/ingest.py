@@ -3,7 +3,13 @@ import math
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, StrictFloat, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    StrictFloat,
+    field_validator,
+    model_validator,
+)
 
 PREDICTIONS_FEATURE_NAME = "__predictions__"
 
@@ -26,6 +32,8 @@ def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float
             raise ValueError(
                 "feature names must be nonblank without surrounding whitespace"
             )
+        if not name.isprintable():
+            raise ValueError("feature names must not contain control characters")
         if not values or not all(math.isfinite(value) for value in values):
             raise ValueError(f"feature '{name}' requires nonempty finite samples")
         lengths.add(len(values))
@@ -132,12 +140,13 @@ class SnapshotResponse(BaseModel):
     window_date: date
     features_recorded: list[str]
     sample_count: int
-    drift_triggered: bool
     recorded_at: datetime
 
 
 class SnapshotFeatureResponse(BaseModel):
     """Serialized snapshot feature record for a single date window."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     feature_name: str
     stats: dict[str, float]
@@ -156,6 +165,8 @@ class ImportanceUploadRequest(BaseModel):
 
 class StoredImportanceResponse(BaseModel):
     """Serialized stored feature importance."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     feature_name: str
     importance: float

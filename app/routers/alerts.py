@@ -1,12 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.routers.dependencies import require_model
 from app.schemas.alert import AlertListResponse, AlertResponse
 from app.services.alert_service import count_alerts, list_alerts, resolve_alert
-from app.services.model_service import get_model
 
 router = APIRouter(tags=["alerts"])
 
@@ -27,7 +27,7 @@ async def _list_alerts_response(
 async def list_active_alerts_endpoint(
     model_id: UUID | None = Query(None),
     resolved: bool = Query(False),
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=1_000_000),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> AlertListResponse:
@@ -35,19 +35,19 @@ async def list_active_alerts_endpoint(
     return await _list_alerts_response(db, model_id, resolved, page, page_size)
 
 
-@router.get("/{model_id}", response_model=AlertListResponse)
+@router.get(
+    "/{model_id}",
+    response_model=AlertListResponse,
+    dependencies=[Depends(require_model)],
+)
 async def list_model_alerts_endpoint(
     model_id: UUID,
     resolved: bool = Query(False),
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=1_000_000),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> AlertListResponse:
     """List alerts for a specific model."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     return await _list_alerts_response(db, model_id, resolved, page, page_size)
 
 

@@ -1,8 +1,6 @@
 """Deterministic model health investigation over an MCP session."""
 
-from typing import Any, TypedDict
-
-from langgraph.graph import END, START, StateGraph
+from typing import Any
 
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from model_health_agent.narration import narrate_report
@@ -16,14 +14,7 @@ class ToolError(Exception):
         super().__init__(message)
 
 
-class State(TypedDict, total=False):
-    model_id: str
-    health: dict
-    findings: list[dict]
-    report: dict
-
-
-def triage(state: State) -> str:
+def triage(state: dict) -> str:
     return (
         "investigate"
         if state["health"]["status"] in ("critical", "attention")
@@ -39,8 +30,8 @@ def mean_direction(direction):
     return "the window mean direction is unavailable"
 
 
-def build_graph(session, narrate=None):
-    """Build a graph using an initialized MCP session."""
+async def investigate_model(session, model_id, narrate=None) -> dict:
+    """Investigate a model using an initialized MCP session."""
 
     async def call(name: str, **arguments: Any) -> dict:
         result = await session.call_tool(name, arguments)
@@ -52,12 +43,12 @@ def build_graph(session, narrate=None):
             )
         return result.structuredContent
 
-    async def collect(state: State) -> dict:
+    async def collect(state: dict) -> dict:
         return {
             "health": await call("analyze_model_health", model_id=state["model_id"])
         }
 
-    async def investigate(state: State) -> dict:
+    async def investigate(state: dict) -> dict:
         health = state["health"]
         names = [row["feature_name"] for row in health["problem_features"][:3]]
         if health["prediction_severity"] not in (None, "green"):
@@ -106,10 +97,7 @@ def build_graph(session, narrate=None):
             )
         return {"findings": findings}
 
-    async def summarize(state: State) -> dict:
-        return {"findings": []}
-
-    async def report(state: State) -> dict:
+    async def report(state: dict) -> dict:
         health = state["health"]
         status = health["status"]
         recommendations = []
@@ -169,20 +157,10 @@ def build_graph(session, narrate=None):
         }
         return {"report": await (narrate or narrate_report)(result)}
 
-    # Synchronous routing can hang when the graph runs repeatedly.
-    async def route(state: State) -> str:
-        return triage(state)
-
-    graph = StateGraph(State)
-    graph.add_node("collect", collect)
-    graph.add_node("investigate", investigate)
-    graph.add_node("summarize", summarize)
-    graph.add_node("report", report)
-    graph.add_edge(START, "collect")
-    graph.add_conditional_edges(
-        "collect", route, {"investigate": "investigate", "summarize": "summarize"}
-    )
-    graph.add_edge("investigate", "report")
-    graph.add_edge("summarize", "report")
-    graph.add_edge("report", END)
-    return graph.compile()
+    state = {"model_id": model_id}
+    state.update(await collect(state))
+    if triage(state) == "investigate":
+        state.update(await investigate(state))
+    else:
+        state["findings"] = []
+    return (await report(state))["report"]

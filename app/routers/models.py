@@ -28,7 +28,7 @@ async def create_model_endpoint(
 
 @router.get("", response_model=ModelListResponse)
 async def list_models_endpoint(
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=1_000_000),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> ModelListResponse:

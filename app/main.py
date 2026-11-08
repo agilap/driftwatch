@@ -19,6 +19,8 @@ logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+# httpx request logs can expose secret tokens in webhook URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("driftwatch")
 
 

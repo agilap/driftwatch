@@ -49,7 +49,7 @@ Analysis runs in process after the snapshot response. Wait for analysis to finis
 
 ## Technology stack
 
-Python, FastAPI, Pydantic, SQLAlchemy with asyncpg, PostgreSQL, Alembic, NumPy, SciPy, APScheduler, and Docker Compose form the service. The demo uses scikit-learn; the optional MCP server and agent use MCP and LangGraph respectively.
+Python, FastAPI, Pydantic, SQLAlchemy with asyncpg, PostgreSQL, Alembic, NumPy, APScheduler, and Docker Compose form the service. The demo uses scikit-learn; the optional MCP server uses MCP, and the model health agent provides automated analysis.
 
 ## Quick start
 
@@ -118,7 +118,7 @@ Requests that fail schema validation return 422 with `detail`, `code`, and `erro
 Reference `bin_edges` are the only boundaries used for both populations: 10 equal-width bins over the reference range, plus underflow and overflow counts. Equal-width bins can represent skewed features poorly; quantile bins are a common alternative.
 
 - **PSI:** uncapped population stability index, with `EPSILON` smoothing and renormalization. With default thresholds, green is below 0.10, yellow is 0.10 through 0.20 inclusive, and red is above 0.20. These are operational heuristics, not significance tests.
-- **JS divergence:** base 2, computed as the square of SciPy's Jensen-Shannon distance, with range 0 to 1.
+- **JS divergence:** base 2, computed from histogram proportions with NumPy, with range 0 to 1.
 - **KS:** `ks_statistic` is the maximum CDF difference over shared bins, a lower bound on the sample KS statistic. `ks_pvalue` is always null for histogram analysis because histograms cannot support a valid p-value. Raw samples are not retained, trading an exact test for reduced storage and privacy exposure.
 - **Weighting:** `weighted_score = normalized importance * min(PSI / PSI_RED_THRESHOLD, 1)`. Importance is normalized over analyzed features; if every analyzed feature with a stored importance is zero, all their weights are zero, and equal weight applies only when none has a stored importance. Health is `100 * (1 - sum(weighted_score))`; no feature evidence produces a null score. Predictions are scored and can alert as `output_shift`, but have zero weight in health.
 
@@ -213,7 +213,7 @@ ruff check .
 black --check .
 ```
 
-`make test` starts the database, creates `driftwatch_test` if it is missing, and runs pytest.
+`make test` requires `requirements-dev.txt` installed in its environment; it starts the database, creates `driftwatch_test` if it is missing, and runs pytest.
 
 The CI workflow runs Ruff, Black, PostgreSQL-backed tests with coverage, and a Compose smoke test including the demo and offline agent.
 

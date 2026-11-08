@@ -82,6 +82,10 @@ async def test_create_alert_stored_in_db(db_session: AsyncSession) -> None:
         message="Drift detected",
     )
 
+    assert alert is not None
+    await db_session.commit()
+    await db_session.refresh(alert)
+    await _dispatch_alert(alert)
     persisted = await db_session.execute(select(Alert).where(Alert.id == alert.id))
     row = persisted.scalar_one_or_none()
 
@@ -219,6 +223,10 @@ async def test_resolve_alert_sets_resolved_at(db_session: AsyncSession) -> None:
         message="Drift detected",
     )
 
+    assert alert is not None
+    await db_session.commit()
+    await db_session.refresh(alert)
+    await _dispatch_alert(alert)
     resolved = await resolve_alert(db=db_session, alert_id=alert.id)
 
     assert resolved.resolved_at is not None
@@ -246,6 +254,10 @@ async def test_list_alerts_filters_resolved(db_session: AsyncSession) -> None:
         severity="red",
         message="Unresolved alert",
     )
+    assert unresolved is not None
+    await db_session.commit()
+    await db_session.refresh(unresolved)
+    await _dispatch_alert(unresolved)
     resolved = await create_alert(
         db=db_session,
         model_id=model_id,
@@ -254,6 +266,10 @@ async def test_list_alerts_filters_resolved(db_session: AsyncSession) -> None:
         severity="red",
         message="Resolved alert",
     )
+    assert resolved is not None
+    await db_session.commit()
+    await db_session.refresh(resolved)
+    await _dispatch_alert(resolved)
     await resolve_alert(db=db_session, alert_id=resolved.id)
 
     unresolved_items = await list_alerts(

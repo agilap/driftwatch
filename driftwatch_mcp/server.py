@@ -129,6 +129,8 @@ def _status(severities: list[str | None]) -> str:
 async def _health(client: httpx.AsyncClient, model_id: UUID) -> dict[str, Any]:
     model = await _get(client, f"/models/{model_id}")
     report = await _get_or_none(client, f"/reports/{model_id}/latest")
+    snapshots = await _get(client, f"/ingest/snapshots/{model_id}")
+    latest_snapshot = snapshots[0] if snapshots else None
     try:
         window, features, prediction = await _feature_drift(client, model_id, None)
     except ApiError as exc:
@@ -136,12 +138,14 @@ async def _health(client: httpx.AsyncClient, model_id: UUID) -> dict[str, Any]:
             raise
         window, features, prediction = None, [], None
     severities = [row["severity"] for row in features]
+    status = _status(severities + ([prediction["severity"]] if prediction else []))
+    if latest_snapshot and latest_snapshot != window and status != "critical":
+        status = "unknown"
     return {
         "model": model,
-        "status": _status(
-            severities + ([prediction["severity"]] if prediction else [])
-        ),
+        "status": status,
         "latest_window": window,
+        "latest_snapshot": latest_snapshot,
         "severity_counts": {s: severities.count(s) for s in ("red", "yellow", "green")},
         "prediction_severity": prediction["severity"] if prediction else None,
         "overall_score": report["overall_score"] if report else None,
@@ -174,7 +178,9 @@ def build_server(client: httpx.AsyncClient) -> FastMCP:
         """Get a model's status, severity counts and latest health score.
 
         Status is no_data, unknown, healthy, attention or critical, taken from the
-        severities stored for the latest window. Health score comes from the latest report; check
+        severities stored for the latest scored window. A newer unscored snapshot
+        makes status unknown unless it is already critical. Health score comes from
+        the latest report; check
         report_covers_latest_window because that report can predate the latest window.
         """
         health = await _health(client, model_id)

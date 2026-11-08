@@ -53,6 +53,7 @@ def _api(routes: dict[str, tuple[int, object]], calls: list | None = None):
 def _monitored(rows: list[dict]) -> dict:
     return {
         f"/models/{MODEL_ID}": (200, {"id": MODEL_ID, "name": "m"}),
+        f"/ingest/snapshots/{MODEL_ID}": (200, ["2026-01-07"]),
         f"/drift/{MODEL_ID}/latest": (200, {"window_date": "2026-01-07"}),
         f"/drift/{MODEL_ID}/2026-01-07": (200, rows),
         f"/alerts/{MODEL_ID}": (200, {"items": [], "total": 0}),
@@ -141,12 +142,41 @@ async def test_page_size_bound_is_validated():
 
 @pytest.mark.asyncio
 async def test_model_without_scores_has_no_data_rather_than_healthy():
-    routes = {f"/models/{MODEL_ID}": (200, {"id": MODEL_ID, "name": "m"})}
+    routes = {
+        f"/models/{MODEL_ID}": (200, {"id": MODEL_ID, "name": "m"}),
+        f"/ingest/snapshots/{MODEL_ID}": (200, []),
+    }
     result, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
     assert not result.isError
     assert payload["status"] == "no_data"
+    assert payload["latest_snapshot"] is None
     assert payload["overall_score"] is None
     assert payload["report_covers_latest_window"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "severity, expected", [("green", "unknown"), ("red", "critical")]
+)
+async def test_newer_unscored_snapshot(severity, expected):
+    routes = _monitored([_row("a", severity)])
+    routes[f"/ingest/snapshots/{MODEL_ID}"] = (200, ["2026-01-08", "2026-01-07"])
+    _, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
+    assert payload["status"] == expected
+    assert payload["latest_snapshot"] == "2026-01-08"
+    assert payload["latest_window"] == "2026-01-07"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_without_scored_window_is_unknown():
+    routes = {
+        f"/models/{MODEL_ID}": (200, {"id": MODEL_ID}),
+        f"/ingest/snapshots/{MODEL_ID}": (200, ["2026-01-08"]),
+    }
+    _, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
+    assert payload["status"] == "unknown"
+    assert payload["latest_snapshot"] == "2026-01-08"
+    assert payload["latest_window"] is None
 
 
 @pytest.mark.asyncio
@@ -166,6 +196,7 @@ async def test_status_follows_stored_severities(severities, expected):
         _api(_monitored(rows)), "get_model_health", model_id=MODEL_ID
     )
     assert payload["status"] == expected
+    assert payload["latest_snapshot"] == payload["latest_window"] == "2026-01-07"
     assert "features" not in payload
 
 

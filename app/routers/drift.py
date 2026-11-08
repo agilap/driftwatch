@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.routers.dependencies import require_model
 from app.schemas.drift import DriftScoreResponse, FeatureDriftSummary, ModelDriftSummary
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.services.drift_engine import (
@@ -15,21 +16,20 @@ from app.services.drift_engine import (
     get_latest_drift_window,
     run_drift_analysis,
 )
-from app.services.model_service import get_model
 
 router = APIRouter(tags=["drift"])
 
 
-@router.get("/{model_id}/latest", response_model=ModelDriftSummary)
+@router.get(
+    "/{model_id}/latest",
+    response_model=ModelDriftSummary,
+    dependencies=[Depends(require_model)],
+)
 async def get_latest_drift_window_endpoint(
     model_id: UUID,
     db: AsyncSession = Depends(get_db),
 ) -> ModelDriftSummary:
     """Return summary for the most recently computed drift window for a model."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     latest_window = await get_latest_drift_window(db=db, model_id=model_id)
     if latest_window is None:
         raise HTTPException(status_code=404, detail="No drift scores found for model")
@@ -77,17 +77,17 @@ async def get_latest_drift_window_endpoint(
     )
 
 
-@router.get("/{model_id}/{window_date}", response_model=list[DriftScoreResponse])
+@router.get(
+    "/{model_id}/{window_date}",
+    response_model=list[DriftScoreResponse],
+    dependencies=[Depends(require_model)],
+)
 async def get_drift_window_endpoint(
     model_id: UUID,
     window_date: date,
     db: AsyncSession = Depends(get_db),
 ) -> list[DriftScoreResponse]:
     """Return drift score rows for a model and specific date window."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     rows = await get_drift_scores_for_window(
         db=db, model_id=model_id, window_date=window_date
     )

@@ -12,8 +12,8 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from driftwatch_mcp.server import build_server
 from model_health_agent.__main__ import render_report
-from model_health_agent.graph import ToolError, build_graph, mean_direction
-from model_health_agent.narration import narrate_report
+from model_health_agent.graph import ToolError, investigate_model, mean_direction
+from model_health_agent.narration import _supported, narrate_report
 
 MODEL_ID = str(uuid4())
 WINDOW = "2026-01-07"
@@ -35,6 +35,7 @@ def api(rows, calls, *, fail_reference=False, missing_mean=False):
         calls.append(path)
         routes = {
             f"/models/{MODEL_ID}": {"id": MODEL_ID, "name": "test"},
+            f"/ingest/snapshots/{MODEL_ID}": [WINDOW],
             f"/drift/{MODEL_ID}/latest": {"window_date": WINDOW},
             f"/drift/{MODEL_ID}/{WINDOW}": rows,
             f"/alerts/{MODEL_ID}": {
@@ -99,12 +100,11 @@ async def run_agent(
         async with create_connected_server_and_client_session(
             server._mcp_server
         ) as session:
-            graph = build_graph(session)
-            state = await graph.ainvoke({"model_id": MODEL_ID})
+            report = await investigate_model(session, MODEL_ID)
             if repeat:
-                second = await graph.ainvoke({"model_id": MODEL_ID})
-                assert state["report"] == second["report"]
-    return state["report"]
+                second = await investigate_model(session, MODEL_ID)
+                assert report == second
+    return report
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_tool_failure_aborts_with_code():
             server._mcp_server
         ) as session:
             with pytest.raises(ToolError) as exc:
-                await build_graph(session).ainvoke({"model_id": MODEL_ID})
+                await investigate_model(session, MODEL_ID)
             assert exc.value.code == "api_error"
             assert "broken reference" in str(exc.value)
 
@@ -376,3 +376,8 @@ async def test_prediction_recommendation_without_mean():
 )
 def test_mean_direction(direction, expected):
     assert mean_direction(direction) == expected
+
+
+def test_supported_skips_unroundable_evidence():
+    assert _supported("score 0.50", {"big": 1e30, "a": 0.5})
+    assert not _supported("score 0.51", {"big": 1e30, "a": 0.5})

@@ -11,6 +11,7 @@ from pydantic import (
     model_validator,
 )
 
+MAX_NAME_LENGTH = 255
 PREDICTIONS_FEATURE_NAME = "__predictions__"
 
 
@@ -24,6 +25,8 @@ def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float
         raise ValueError("features must not be empty")
     lengths = set()
     for name, values in features.items():
+        if len(name) > MAX_NAME_LENGTH:
+            raise ValueError("feature names must be at most 255 characters")
         if has_unstorable_text(name):
             raise ValueError("feature names must not contain NUL or invalid characters")
         if name == PREDICTIONS_FEATURE_NAME:

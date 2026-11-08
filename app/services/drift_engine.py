@@ -8,7 +8,6 @@ from uuid import UUID
 import numpy as np
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from scipy.spatial.distance import jensenshannon
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,7 +90,13 @@ def compute_js_divergence_from_counts(
     """Compute base-2 Jensen-Shannon divergence in [0, 1]."""
     ref, prod = _validate_counts(reference, production)
     p, q = _count_proportions(ref), _count_proportions(prod)
-    return float(np.clip(jensenshannon(p, q, base=2) ** 2, 0.0, 1.0))
+    m = (p + q) / 2
+    p_nonzero, q_nonzero = p > 0, q > 0
+    divergence = 0.5 * (
+        np.sum(p[p_nonzero] * np.log2(p[p_nonzero] / m[p_nonzero]))
+        + np.sum(q[q_nonzero] * np.log2(q[q_nonzero] / m[q_nonzero]))
+    )
+    return float(np.clip(divergence, 0.0, 1.0))
 
 
 def compute_binned_ks(reference: np.ndarray, production: np.ndarray) -> float:
@@ -343,13 +348,12 @@ async def run_drift_analysis(
                 ),
                 severity="red",
                 window_date=window_date,
-                commit=False,
                 message=(
                     f"{label} PSI={psi:.3f} exceeds RED threshold on {window_date}"
                 ),
             )
 
-            if getattr(alert, "_dispatch_pending", False):
+            if alert is not None:
                 new_alerts.append(alert)
 
         severity_counts[severity] += 1
@@ -379,7 +383,6 @@ async def run_drift_analysis(
     await db.commit()
     for alert in new_alerts:
         await db.refresh(alert)
-        alert._dispatch_pending = False
     if new_alerts:
         # End the refresh transaction so a slow webhook holds no database connection.
         await db.commit()

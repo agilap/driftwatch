@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from scipy.spatial.distance import jensenshannon
 from scipy.stats import ks_2samp
 
 from app.services.drift_engine import (
@@ -30,6 +31,21 @@ def test_js_hand_calculated() -> None:
     expected = 0.5 * np.log2(4 / 3) + 0.25 * np.log2(2 / 3) + 0.25
     assert compute_js_divergence_from_counts([2, 0], [1, 1]) == pytest.approx(expected)
     assert compute_js_divergence_from_counts([1, 0], [0, 1]) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "ref, prod",
+    [
+        ([1, 2, 3], [3, 4, 1]),
+        ([0, 3, 0, 1], [2, 0, 0, 4]),
+        ([1, 0], [0, 1]),
+        ([0, 5], [0, 9]),
+    ],
+)
+def test_js_matches_scipy(ref, prod) -> None:
+    assert compute_js_divergence_from_counts(ref, prod) == pytest.approx(
+        jensenshannon(ref, prod, base=2) ** 2
+    )
 
 
 def test_binned_ks_hand_calculated_and_sample_lower_bound() -> None:

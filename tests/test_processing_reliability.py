@@ -71,9 +71,34 @@ async def test_alert_participates_in_callers_transaction():
             severity="red",
             message="shift",
             window_date=date(2026, 1, 1),
-            commit=False,
         )
     session.flush.assert_awaited_once()
+    session.commit.assert_not_awaited()
+    dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_alert_is_not_created_or_dispatched():
+    session = AsyncMock()
+    session.add = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = object()
+    session.execute.return_value = result
+    with patch(
+        "app.services.alert_service._dispatch_alert", new=AsyncMock()
+    ) as dispatch:
+        alert = await create_alert(
+            db=session,
+            model_id=uuid4(),
+            feature_name="income",
+            alert_type="drift_red",
+            severity="red",
+            message="shift",
+            window_date=date(2026, 1, 1),
+        )
+    assert alert is None
+    session.add.assert_not_called()
+    session.flush.assert_not_awaited()
     session.commit.assert_not_awaited()
     dispatch.assert_not_awaited()
 

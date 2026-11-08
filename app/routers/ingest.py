@@ -3,10 +3,11 @@ import logging
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal, get_db
+from app.routers.dependencies import require_model
 from app.schemas.ingest import (
     ImportanceUploadRequest,
     ImportanceUploadResponse,
@@ -20,7 +21,6 @@ from app.schemas.ingest import (
 )
 from app.services.drift_engine import run_drift_analysis
 from app.services import importance_scorer
-from app.services.model_service import get_model
 from app.services.reference_service import list_reference_features, register_reference
 from app.services.snapshot_service import (
     get_snapshot_window,
@@ -55,23 +55,19 @@ async def register_reference_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> ReferenceResponse:
     """Register reference distributions and optional feature importances."""
-    model = await get_model(db=db, model_id=payload.model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     return await register_reference(db=db, payload=payload)
 
 
-@router.get("/reference/{model_id}", response_model=ReferenceListResponse)
+@router.get(
+    "/reference/{model_id}",
+    response_model=ReferenceListResponse,
+    dependencies=[Depends(require_model)],
+)
 async def list_reference_endpoint(
     model_id: UUID,
     db: AsyncSession = Depends(get_db),
 ) -> ReferenceListResponse:
     """List all registered reference features for a model."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     return await list_reference_features(db=db, model_id=model_id)
 
 
@@ -89,21 +85,23 @@ async def ingest_snapshot_endpoint(
     return response
 
 
-@router.get("/snapshots/{model_id}", response_model=list[date])
+@router.get(
+    "/snapshots/{model_id}",
+    response_model=list[date],
+    dependencies=[Depends(require_model)],
+)
 async def list_snapshot_dates_endpoint(
     model_id: UUID,
     db: AsyncSession = Depends(get_db),
 ) -> list[date]:
     """List all recorded snapshot windows for a model."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     return await list_snapshot_dates(db=db, model_id=model_id)
 
 
 @router.get(
-    "/snapshots/{model_id}/{window_date}", response_model=list[SnapshotFeatureResponse]
+    "/snapshots/{model_id}/{window_date}",
+    response_model=list[SnapshotFeatureResponse],
+    dependencies=[Depends(require_model)],
 )
 async def get_snapshot_window_endpoint(
     model_id: UUID,
@@ -111,16 +109,14 @@ async def get_snapshot_window_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> list[SnapshotFeatureResponse]:
     """Get per-feature snapshot stats for a specific model and date window."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     rows = await get_snapshot_window(db=db, model_id=model_id, window_date=window_date)
     return [SnapshotFeatureResponse.model_validate(row) for row in rows]
 
 
 @model_importance_router.post(
-    "/models/{model_id}/importances", response_model=ImportanceUploadResponse
+    "/models/{model_id}/importances",
+    response_model=ImportanceUploadResponse,
+    dependencies=[Depends(require_model)],
 )
 async def upload_model_importances_endpoint(
     model_id: UUID,
@@ -128,10 +124,6 @@ async def upload_model_importances_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> ImportanceUploadResponse:
     """Upload and upsert model feature importances."""
-    model = await get_model(db=db, model_id=model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model not found")
-
     normalized = importance_scorer.normalise_importances(payload.importances)
 
     rows = await importance_scorer.upsert_importances(

@@ -1,2 +1,1 @@
 -r requirements-mcp.txt
-langgraph==1.2.19

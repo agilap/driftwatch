@@ -63,7 +63,7 @@ async def test_analysis_uses_counts_and_analyzed_importance_scope() -> None:
         new=AsyncMock(return_value={"a": 2, "unrelated": 98}),
     ), patch(
         "app.services.alert_service.create_alert",
-        new=AsyncMock(return_value=SimpleNamespace(_dispatch_pending=False)),
+        new=AsyncMock(return_value=None),
     ):
         results = await run_drift_analysis(session, model_id, date(2026, 1, 1))
     assert len(results) == 2
@@ -85,7 +85,7 @@ async def test_small_snapshot_warns_without_suppressing_alert(caplog) -> None:
         new=AsyncMock(return_value={}),
     ), patch(
         "app.services.alert_service.create_alert",
-        new=AsyncMock(return_value=SimpleNamespace(_dispatch_pending=False)),
+        new=AsyncMock(return_value=None),
     ) as create_alert, caplog.at_level(
         logging.WARNING, logger="app.services.drift_engine"
     ):
@@ -137,7 +137,7 @@ async def test_histogram_analysis_http_response_preserves_null_pvalue() -> None:
             new=AsyncMock(return_value={}),
         ), patch(
             "app.services.alert_service.create_alert",
-            new=AsyncMock(return_value=SimpleNamespace(_dispatch_pending=False)),
+            new=AsyncMock(return_value=None),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://testserver"

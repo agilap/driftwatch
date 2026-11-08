@@ -33,13 +33,13 @@ def _supported(narrative, report):
         if number == number.to_integral_value() and 1 <= number <= 5:
             continue
         precision = Decimal(1).scaleb(number.as_tuple().exponent)
-        try:
-            if not any(
-                item.quantize(precision, rounding=ROUND_HALF_UP) == number
-                for item in evidence
-            ):
-                return False
-        except InvalidOperation:
+        for item in evidence:
+            try:
+                if item.quantize(precision, rounding=ROUND_HALF_UP) == number:
+                    break
+            except InvalidOperation:
+                continue
+        else:
             return False
     return True
 

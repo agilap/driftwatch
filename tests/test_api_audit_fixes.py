@@ -36,7 +36,7 @@ async def test_latest_drift_excludes_predictions_from_counts(async_client):
         for name in ("income", "__predictions__")
     ]
     with patch(
-        "app.routers.drift.get_model", new=AsyncMock(return_value=object())
+        "app.routers.dependencies.get_model", new=AsyncMock(return_value=object())
     ), patch(
         "app.routers.drift.get_latest_drift_window",
         new=AsyncMock(return_value=date(2026, 1, 7)),

@@ -11,7 +11,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
-from model_health_agent.graph import ToolError, build_graph
+from model_health_agent.graph import ToolError, investigate_model
 
 
 async def run(model_id):
@@ -29,9 +29,7 @@ async def run(model_id):
         async with ClientSession(*streams) as session:
             await session.initialize()
             try:
-                report = (await build_graph(session).ainvoke({"model_id": model_id}))[
-                    "report"
-                ]
+                report = await investigate_model(session, model_id)
             except ToolError as exc:
                 error = exc
     if error is not None:

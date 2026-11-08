@@ -987,7 +987,7 @@ async def test_model_health_agent_reports_real_demo_evidence(
 
     from driftwatch_mcp.server import build_server
     from examples.loan_risk_demo.config import FEATURES, SCENARIOS
-    from model_health_agent.graph import build_graph
+    from model_health_agent.graph import investigate_model
 
     client, session_factory = integration_context
     model_id, *_ = await _demo_lifecycle(client, session_factory, tmp_path, monkeypatch)
@@ -1008,9 +1008,8 @@ async def test_model_health_agent_reports_real_demo_evidence(
     async with create_connected_server_and_client_session(
         server._mcp_server
     ) as mcp_session:
-        graph = build_graph(mcp_session)
-        report = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
-        second = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
+        report = await investigate_model(mcp_session, str(model_id))
+        second = await investigate_model(mcp_session, str(model_id))
 
     assert report == second
     assert report["status"] == "critical"

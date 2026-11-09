@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
-import time
 from collections.abc import AsyncGenerator
 from datetime import date
 from uuid import UUID
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import get_db
@@ -41,14 +44,7 @@ async def ingest_snapshot_context() -> (
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
 
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -110,7 +106,6 @@ async def test_ingest_snapshot_success(
     assert body["window_date"] == "2026-03-26"
     assert set(body["features_recorded"]) == {"income", "credit_score"}
     assert body["sample_count"] == 3
-    assert body["drift_triggered"] is True
 
     async with session_factory() as session:
         result = await session.execute(
@@ -225,25 +220,74 @@ async def test_ingest_snapshot_upsert(
 
 
 @pytest.mark.asyncio
-async def test_ingest_snapshot_returns_immediately(
+async def test_ingest_snapshot_responds_before_analysis(
     ingest_snapshot_context: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _ = ingest_snapshot_context
     model_id = await _create_model(client, name="snapshot-speed")
 
-    start = time.perf_counter()
-    response = await client.post(
-        "/ingest/snapshot",
-        json={
+    events = []
+    analysis_calls = []
+
+    async def record_analysis(model_id: UUID, window_date: date) -> None:
+        events.append("analysis")
+        analysis_calls.append((model_id, window_date))
+
+    monkeypatch.setattr(
+        "app.routers.ingest.analyze_snapshot_in_background", record_analysis
+    )
+    body = json.dumps(
+        {
             "model_id": str(model_id),
             "timestamp": "2026-03-26T12:00:00Z",
             "features": {"income": [10.0, 20.0, 30.0]},
-        },
-    )
-    elapsed = time.perf_counter() - start
+        }
+    ).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/ingest/snapshot",
+        "raw_path": b"/ingest/snapshot",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "root_path": "",
+    }
+    request_sent = False
+    response_complete = asyncio.Event()
+    messages = []
 
-    assert response.status_code == 200
-    assert elapsed < 0.2
+    async def receive():
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await response_complete.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        events.append(message["type"])
+        messages.append(message)
+        if message["type"] == "http.response.body" and not message.get(
+            "more_body", False
+        ):
+            response_complete.set()
+
+    await app(scope, receive, send)
+
+    response_start = next(m for m in messages if m["type"] == "http.response.start")
+    assert response_start["status"] == 200
+    assert analysis_calls == [(model_id, date(2026, 3, 26))]
+    assert events.index("http.response.start") < events.index("analysis")
 
 
 @pytest.mark.asyncio

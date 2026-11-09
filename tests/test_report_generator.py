@@ -6,15 +6,22 @@ from datetime import date
 from uuid import uuid4
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from httpx import ASGITransport, AsyncClient
+
+from app.database import get_db
+from app.main import app
 
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
+from app.models.snapshot import Snapshot
 from app.services.report_generator import compute_overall_health_score, generate_report
 
 
@@ -37,14 +44,7 @@ async def db_session(run_migrations: None) -> AsyncGenerator[AsyncSession, None]
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
         yield session
 
@@ -310,6 +310,7 @@ async def test_report_without_evidence_has_no_health(db_session: AsyncSession) -
     report = await generate_report(
         db_session, model.id, date(2026, 3, 16), date(2026, 3, 22)
     )
+    assert report.report_json["unscored_windows"] == []
     assert report.overall_score is None
     assert report.report_json["executive_summary"]["overall_score"] is None
     assert "No drift data available" in report.report_markdown
@@ -349,3 +350,263 @@ async def test_report_health_endpoints_and_null_pvalue(
     )
     assert "0.375" in report.report_markdown
     assert "KS p-value" not in report.report_markdown
+
+
+@pytest.mark.asyncio
+async def test_output_recommendation_uses_configured_threshold(
+    db_session: AsyncSession, monkeypatch
+) -> None:
+    from app.config import settings
+    from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
+
+    monkeypatch.setattr(settings, "psi_red_threshold", 0.3)
+    model = await _create_model(db_session)
+    week_start = date(2026, 3, 16)
+    await _insert_week_drift(
+        db_session,
+        model.id,
+        week_start,
+        [{"feature_name": PREDICTIONS_FEATURE_NAME, "psi": 0.25, "severity": "yellow"}],
+    )
+    report = await generate_report(db_session, model.id, week_start, date(2026, 3, 22))
+    assert report.report_json["output_distribution"][
+        "output_drift_psi"
+    ] == pytest.approx(0.25)
+    assert (
+        "Output distribution has significantly shifted"
+        not in report.report_json["recommendations"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_identifies_unscored_snapshot_days(
+    db_session: AsyncSession,
+) -> None:
+    model = await _create_model(db_session)
+    week_start, week_end = date(2026, 3, 16), date(2026, 3, 22)
+    for day in (
+        date(2026, 3, 15),
+        week_start,
+        date(2026, 3, 17),
+        week_end,
+        date(2026, 3, 23),
+    ):
+        db_session.add(
+            Snapshot(
+                model_id=model.id,
+                window_date=day,
+                feature_name="income",
+                distribution={},
+                stats={},
+            )
+        )
+    db_session.add(
+        DriftScore(
+            model_id=model.id,
+            window_date=date(2026, 3, 17),
+            feature_name="income",
+            ks_statistic=0.1,
+            ks_pvalue=0.04,
+            psi=0.1,
+            js_divergence=0.0,
+            weighted_score=0.0,
+            severity="green",
+        )
+    )
+    await db_session.commit()
+
+    report = await generate_report(db_session, model.id, week_start, week_end)
+
+    assert report.report_json["unscored_windows"] == ["2026-03-16", "2026-03-22"]
+    summary = report.report_markdown.split("## Feature Drift Summary")[0]
+    assert "Warning:" in summary
+    assert "2026-03-16" in summary and "2026-03-22" in summary
+    for day in report.report_json["unscored_windows"]:
+        assert (
+            f"Retry analysis for {day}: POST /drift/{model.id}/{day}/analyze"
+            in report.report_json["recommendations"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_report_returns_after_concurrent_deletion(
+    db_session: AsyncSession, monkeypatch
+) -> None:
+    model = await _create_model(db_session)
+    original_commit = db_session.commit
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    deleted_ids = []
+
+    async def commit_and_delete() -> None:
+        await original_commit()
+        async with session_factory() as other_session:
+            result = await other_session.execute(
+                delete(HealthReport)
+                .where(HealthReport.model_id == model.id)
+                .returning(HealthReport.id)
+            )
+            deleted_ids.extend(result.scalars().all())
+            await other_session.commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_and_delete)
+    report = await generate_report(
+        db_session, model.id, date(2026, 3, 16), date(2026, 3, 22)
+    )
+
+    assert deleted_ids == [report.id]
+    assert report.id is not None
+
+
+def test_status_band_boundaries() -> None:
+    from app.services.report_generator import _status_band
+
+    assert [_status_band(score) for score in (80, 79.99, 60, 59.99)] == [
+        "GREEN",
+        "YELLOW",
+        "YELLOW",
+        "RED",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_regenerating_report_updates_details(db_session: AsyncSession) -> None:
+    model = await _create_model(db_session)
+    start, end = date(2026, 3, 16), date(2026, 3, 22)
+    await _insert_week_drift(
+        db_session, model.id, start, [{"feature_name": "income", "psi": 0.1}]
+    )
+    first = await generate_report(db_session, model.id, start, end)
+    first_json, first_markdown = first.report_json, first.report_markdown
+    scores = (
+        await db_session.scalars(
+            select(DriftScore).where(DriftScore.model_id == model.id)
+        )
+    ).all()
+    for score in scores:
+        score.psi = 0.9
+        score.severity = "red"
+        score.weighted_score = 0.9
+    await db_session.commit()
+    second = await generate_report(db_session, model.id, start, end)
+    assert second.report_json != first_json
+    assert second.report_markdown != first_markdown
+
+
+@pytest.mark.asyncio
+async def test_webhook_timeout_is_five_seconds() -> None:
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from app.models.alert import Alert
+    from app.services.alert_service import _dispatch_alert
+
+    alert = Alert(id=uuid4(), model_id=uuid4(), created_at=datetime.now(timezone.utc))
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.post = AsyncMock(return_value=MagicMock(status_code=200))
+    with patch(
+        "app.services.alert_service.settings.alert_webhook_url",
+        "https://example.com/hook",
+    ), patch(
+        "app.services.alert_service.httpx.AsyncClient", return_value=client
+    ) as constructor:
+        await _dispatch_alert(alert)
+    constructor.assert_called_once_with(timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_webhook_non_2xx_logs_error_without_url(caplog) -> None:
+    import logging
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, patch
+    from app.models.alert import Alert
+    from app.services.alert_service import _dispatch_alert
+
+    alert = Alert(id=uuid4(), model_id=uuid4(), created_at=datetime.now(timezone.utc))
+    url = "https://example.com/private-hook"
+    with patch("app.services.alert_service.settings.alert_webhook_url", url), patch(
+        "httpx.AsyncClient.post",
+        new=AsyncMock(return_value=type("Response", (), {"status_code": 500})()),
+    ), caplog.at_level(logging.INFO, logger="app.services.alert_service"):
+        await _dispatch_alert(alert)
+    assert any(
+        record.levelno == logging.ERROR
+        and str(alert.id) in record.message
+        and "500" in record.message
+        for record in caplog.records
+    )
+    assert "dispatched successfully" not in caplog.text
+    assert url not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("high_day", [date(2026, 3, 16), date(2026, 3, 22)])
+async def test_report_selects_highest_psi_in_either_date_order(
+    db_session: AsyncSession, high_day: date
+) -> None:
+    model = await _create_model(db_session)
+    week_start = date(2026, 3, 16)
+    await _insert_week_drift(
+        db_session, model.id, week_start, [{"feature_name": "income", "psi": 0.05}]
+    )
+    await db_session.execute(
+        update(DriftScore)
+        .where(DriftScore.model_id == model.id, DriftScore.window_date == high_day)
+        .values(psi=0.35)
+    )
+    await db_session.commit()
+
+    report = await generate_report(db_session, model.id, week_start, date(2026, 3, 22))
+    assert report.report_json["feature_drift_summary"][0]["psi"] == pytest.approx(0.35)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newer_windows", [[], ["2026-03-23"]])
+async def test_latest_report_requires_evidence(
+    db_session: AsyncSession, newer_windows: list[str]
+) -> None:
+    model = await _create_model(db_session)
+    earlier = HealthReport(
+        model_id=model.id,
+        week_start=date(2026, 3, 16),
+        week_end=date(2026, 3, 22),
+        overall_score=80,
+        report_json={},
+    )
+    newer = HealthReport(
+        model_id=model.id,
+        week_start=date(2026, 3, 23),
+        week_end=date(2026, 3, 29),
+        overall_score=None,
+        report_json={"unscored_windows": newer_windows},
+    )
+    db_session.add_all([earlier, newer])
+    await db_session.commit()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            latest = await client.get(f"/reports/{model.id}/latest")
+            assert latest.status_code == 200
+            assert latest.json()["id"] == str(newer.id if newer_windows else earlier.id)
+            week = await client.get(f"/reports/{model.id}/2026-03-23")
+            assert week.status_code == 200
+            assert week.json()["id"] == str(newer.id)
+            listing = await client.get(f"/reports/{model.id}")
+            assert listing.status_code == 200
+            assert {item["id"] for item in listing.json()["items"]} == {
+                str(earlier.id),
+                str(newer.id),
+            }
+            await db_session.delete(earlier)
+            if newer_windows:
+                newer.report_json = {"unscored_windows": []}
+            await db_session.commit()
+            assert (await client.get(f"/reports/{model.id}/latest")).status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_db, None)

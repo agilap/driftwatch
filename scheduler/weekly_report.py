@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.model_registry import ModelRegistry
-from app.services.report_generator import generate_report
+from app.services.report_generator import generate_report, get_report_for_week
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +18,10 @@ weekly_scheduler = AsyncIOScheduler(timezone="UTC")
 
 
 async def run_weekly_reports_job() -> None:
-    """Generate weekly reports for all models for the previous 7-day window."""
+    """Generate missing reports for the last complete UTC Monday–Sunday week."""
     today_utc = datetime.now(timezone.utc).date()
-    week_end = today_utc - timedelta(days=1)
-    week_start = week_end - timedelta(days=6)
+    week_start = today_utc - timedelta(days=today_utc.weekday() + 7)
+    week_end = week_start + timedelta(days=6)
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -32,6 +32,8 @@ async def run_weekly_reports_job() -> None:
     for model in models:
         async with AsyncSessionLocal() as db:
             try:
+                if await get_report_for_week(db, model.id, week_start) is not None:
+                    continue
                 report = await generate_report(
                     db=db,
                     model_id=model.id,
@@ -49,7 +51,7 @@ async def run_weekly_reports_job() -> None:
 
 
 def start_weekly_scheduler() -> None:
-    """Start scheduler and register weekly report cron job."""
+    """Start scheduler and register the report cron job."""
     if weekly_scheduler.running:
         return
 
@@ -59,6 +61,8 @@ def start_weekly_scheduler() -> None:
         trigger=trigger,
         id="weekly-health-report",
         replace_existing=True,
+        # A late run fires after a sleep; later scheduled runs retry missed reports.
+        misfire_grace_time=None,
     )
     weekly_scheduler.start()
 

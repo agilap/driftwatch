@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import os
 from datetime import date
-from collections.abc import AsyncGenerator
 from uuid import UUID, uuid4
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
-from alembic import command
-from alembic.config import Config
 from fastapi import HTTPException
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert
 from app.models.model_registry import ModelRegistry
@@ -28,37 +23,7 @@ from app.services.drift_engine import run_drift_analysis
 from app.services.model_service import _compute_distribution_stats, _compute_histogram
 
 
-def _database_url() -> str:
-    return os.environ["DATABASE_URL"]
-
-
-@pytest.fixture(scope="session", autouse=True)
-def run_migrations() -> None:
-    """Apply migrations for alert service tests."""
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", _database_url())
-    command.upgrade(cfg, "head")
-
-
-@pytest_asyncio.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Provide isolated async DB session for each alert test."""
-    engine = create_async_engine(_database_url(), future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-        await session.commit()
-        yield session
-
-    await engine.dispose()
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 async def _create_model(db_session: AsyncSession, name: str | None = None) -> UUID:
@@ -82,6 +47,10 @@ async def test_create_alert_stored_in_db(db_session: AsyncSession) -> None:
         message="Drift detected",
     )
 
+    assert alert is not None
+    await db_session.commit()
+    await db_session.refresh(alert)
+    await _dispatch_alert(alert)
     persisted = await db_session.execute(select(Alert).where(Alert.id == alert.id))
     row = persisted.scalar_one_or_none()
 
@@ -141,6 +110,7 @@ async def test_dispatch_webhook_called_when_url_configured(
     alert = Alert(
         model_id=model_id,
         feature_name="income",
+        window_date=date(2026, 3, 27),
         alert_type="drift_red",
         severity="red",
         message="Drift",
@@ -157,6 +127,7 @@ async def test_dispatch_webhook_called_when_url_configured(
             await _dispatch_alert(alert)
 
     post_mock.assert_awaited_once()
+    assert post_mock.await_args.kwargs["json"]["window_date"] == "2026-03-27"
 
 
 @pytest.mark.asyncio
@@ -217,6 +188,10 @@ async def test_resolve_alert_sets_resolved_at(db_session: AsyncSession) -> None:
         message="Drift detected",
     )
 
+    assert alert is not None
+    await db_session.commit()
+    await db_session.refresh(alert)
+    await _dispatch_alert(alert)
     resolved = await resolve_alert(db=db_session, alert_id=alert.id)
 
     assert resolved.resolved_at is not None
@@ -244,6 +219,10 @@ async def test_list_alerts_filters_resolved(db_session: AsyncSession) -> None:
         severity="red",
         message="Unresolved alert",
     )
+    assert unresolved is not None
+    await db_session.commit()
+    await db_session.refresh(unresolved)
+    await _dispatch_alert(unresolved)
     resolved = await create_alert(
         db=db_session,
         model_id=model_id,
@@ -252,6 +231,10 @@ async def test_list_alerts_filters_resolved(db_session: AsyncSession) -> None:
         severity="red",
         message="Resolved alert",
     )
+    assert resolved is not None
+    await db_session.commit()
+    await db_session.refresh(resolved)
+    await _dispatch_alert(resolved)
     await resolve_alert(db=db_session, alert_id=resolved.id)
 
     unresolved_items = await list_alerts(

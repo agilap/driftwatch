@@ -23,7 +23,7 @@ python -m model_health_agent <model_id>
 python -m model_health_agent <model_id> --json
 ```
 
-Set `DRIFTWATCH_URL` if the service is not at `http://localhost:8000`.
+Set `DRIFTWATCH_URL` if the service is not at `http://localhost:8000`, and `DRIFTWATCH_API_KEY` if it requires a key.
 
 ## Modes and routing
 

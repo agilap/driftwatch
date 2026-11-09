@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import socket
 from collections.abc import AsyncGenerator
 from datetime import date, datetime, timezone
@@ -12,12 +11,9 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
-import pytest_asyncio
-from alembic import command
-from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
 from app.database import get_db
@@ -28,65 +24,14 @@ from app.models.feature_importance import FeatureImportance
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services.importance_scorer import upsert_importances
+from tests.helpers import _model, _normal, _reference
 
 DAY = "2026-02-02"
 TIMESTAMP = f"{DAY}T12:00:00Z"
 Context = tuple[AsyncClient, async_sessionmaker[AsyncSession]]
 
 
-@pytest.fixture(scope="session", autouse=True)
-def run_migrations() -> None:
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
-    command.upgrade(cfg, "head")
-
-
-@pytest_asyncio.fixture
-async def ctx() -> AsyncGenerator[Context, None]:
-    engine = create_async_engine(os.environ["DATABASE_URL"], future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-        await session.commit()
-
-    async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_db] = _override_get_db
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield client, session_factory
-    app.dependency_overrides.pop(get_db, None)
-    await engine.dispose()
-
-
-def _normal(mean: float = 0.0, seed: int = 1, size: int = 1000) -> list[float]:
-    return np.random.default_rng(seed).normal(mean, 1.0, size).tolist()
-
-
-async def _model(client: AsyncClient) -> str:
-    response = await client.post("/models", json={"name": f"m-{uuid4()}"})
-    assert response.status_code == 201
-    return response.json()["id"]
-
-
-async def _reference(client: AsyncClient, model_id: str, **extra) -> dict:
-    body = {
-        "model_id": model_id,
-        "features": {"a": _normal(seed=1), "b": _normal(seed=2)},
-        **extra,
-    }
-    response = await client.post("/ingest/reference", json=body)
-    assert response.status_code == 200, response.text
-    return body
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 async def _snapshot(client: AsyncClient, model_id: str, features: dict, **extra):

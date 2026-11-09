@@ -22,6 +22,8 @@ The server speaks MCP over stdio. A client configuration, run from the repositor
 }
 ```
 
+If the API requires a key, add `DRIFTWATCH_API_KEY` to `env`.
+
 ## Why this lives in the main repository
 
 The earlier `driftwatch-mcp` repository duplicated the statistics and had already
@@ -41,6 +43,10 @@ they recomputed statistics instead of reading monitoring results.
 | `get_active_alerts` | Every unresolved alert |
 | `get_health_report` | A stored weekly report, by default the latest |
 | `analyze_model_health` | Ranked problem features, prediction drift, alerts and limits |
+
+Both health tools return `unscored_windows`, the snapshot dates without scores in
+the seven days ending at the latest snapshot, newest first. Any unscored window makes
+status `unknown` unless the latest scored window is `critical`.
 
 Failures return `isError: true` with `{"error": {"code", "message", "status"}}`. The
 code is `not_found`, `api_error` or `service_unavailable`. Malformed arguments, such as

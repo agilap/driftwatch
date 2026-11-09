@@ -1,10 +1,17 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import math
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, StrictFloat, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    StrictFloat,
+    field_validator,
+    model_validator,
+)
 
+MAX_NAME_LENGTH = 255
 PREDICTIONS_FEATURE_NAME = "__predictions__"
 
 
@@ -18,6 +25,8 @@ def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float
         raise ValueError("features must not be empty")
     lengths = set()
     for name, values in features.items():
+        if len(name) > MAX_NAME_LENGTH:
+            raise ValueError("feature names must be at most 255 characters")
         if has_unstorable_text(name):
             raise ValueError("feature names must not contain NUL or invalid characters")
         if name == PREDICTIONS_FEATURE_NAME:
@@ -26,6 +35,8 @@ def _validate_features(features: dict[str, list[float]]) -> dict[str, list[float
             raise ValueError(
                 "feature names must be nonblank without surrounding whitespace"
             )
+        if not name.isprintable():
+            raise ValueError("feature names must not contain control characters")
         if not values or not all(math.isfinite(value) for value in values):
             raise ValueError(f"feature '{name}' requires nonempty finite samples")
         lengths.add(len(values))
@@ -122,6 +133,8 @@ class SnapshotPayload(BaseModel):
         if value.tzinfo is None or value.utcoffset() != timedelta(0):
             msg = "timestamp must be UTC"
             raise ValueError(msg)
+        if value > datetime.now(timezone.utc) + timedelta(days=1):
+            raise ValueError("timestamp must not be more than one day in the future")
         return value
 
 
@@ -132,12 +145,13 @@ class SnapshotResponse(BaseModel):
     window_date: date
     features_recorded: list[str]
     sample_count: int
-    drift_triggered: bool
     recorded_at: datetime
 
 
 class SnapshotFeatureResponse(BaseModel):
     """Serialized snapshot feature record for a single date window."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     feature_name: str
     stats: dict[str, float]
@@ -156,6 +170,8 @@ class ImportanceUploadRequest(BaseModel):
 
 class StoredImportanceResponse(BaseModel):
     """Serialized stored feature importance."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     feature_name: str
     importance: float

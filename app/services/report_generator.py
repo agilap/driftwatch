@@ -4,12 +4,15 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
+from app.models.snapshot import Snapshot
 from app.services import importance_scorer
 
 
@@ -49,6 +52,7 @@ def _render_markdown_report(
     red_count: int,
     yellow_count: int,
     green_count: int,
+    unscored_windows: list[str] | None = None,
 ) -> str:
     """Render report markdown from prepared report components."""
     health_summary = (
@@ -69,7 +73,20 @@ def _render_markdown_report(
             f"{feature_count} features monitored. {red_count} critical, "
             f"{yellow_count} moderate, {green_count} stable."
         ),
-        (recommendations[0] if recommendations else "No immediate actions required."),
+        (
+            recommendations[0]
+            if recommendations
+            else (
+                "No immediate actions required."
+                if ranked_rows
+                else "No data for this period."
+            )
+        ),
+        *(
+            [f"Warning: snapshots have no scores for {', '.join(unscored_windows)}."]
+            if unscored_windows
+            else []
+        ),
         "",
         "## Feature Drift Summary",
         "| Feature | PSI | KS Statistic | JS Divergence | Weighted Score | Severity |",
@@ -79,7 +96,7 @@ def _render_markdown_report(
     for row in ranked_rows:
         lines.append(
             "| {feature} | {psi:.3f} | {ks:.3f} | {js:.3f} | {weighted:.3f} | {severity} |".format(
-                feature=row["feature_name"],
+                feature=row["feature_name"].replace("|", "\\|"),
                 psi=float(row.get("psi", 0.0)),
                 ks=float(row["ks_statistic"]),
                 js=float(row.get("js_divergence", 0.0)),
@@ -130,8 +147,7 @@ async def generate_report(
     model_result = await db.execute(
         select(ModelRegistry).where(ModelRegistry.id == model_id).with_for_update()
     )
-    model = model_result.scalar_one_or_none()
-    model_name = model.name if model is not None else str(model_id)
+    model_name = model_result.scalar_one().name
 
     rows_result = await db.execute(
         select(DriftScore)
@@ -144,6 +160,21 @@ async def generate_report(
     )
     rows = list(rows_result.scalars().all())
 
+    snapshot_dates_result = await db.execute(
+        select(Snapshot.window_date)
+        .where(
+            Snapshot.model_id == model_id,
+            Snapshot.window_date >= week_start,
+            Snapshot.window_date <= week_end,
+        )
+        .distinct()
+    )
+    scored_dates = {row.window_date for row in rows}
+    unscored_windows = [
+        day.isoformat()
+        for day in sorted(set(snapshot_dates_result.scalars().all()) - scored_dates)
+    ]
+
     worst_by_feature: dict[str, DriftScore] = {}
     for row in rows:
         current = worst_by_feature.get(row.feature_name)
@@ -152,7 +183,7 @@ async def generate_report(
         if row_psi > current_psi:
             worst_by_feature[row.feature_name] = row
 
-    output_row = worst_by_feature.pop("__predictions__", None)
+    output_row = worst_by_feature.pop(PREDICTIONS_FEATURE_NAME, None)
     output_drift = (
         float(output_row.psi) if output_row and output_row.psi is not None else None
     )
@@ -190,10 +221,16 @@ async def generate_report(
         )
     for row in red_features:
         recommendations.append(f"Investigate {row['feature_name']} immediately")
-    if output_drift is not None and output_drift > 0.20:
+    if output_drift is not None and output_drift > settings.psi_red_threshold:
         recommendations.append("Output distribution has significantly shifted")
 
+    for day in unscored_windows:
+        recommendations.append(
+            f"Retry analysis for {day}: POST /drift/{model_id}/{day}/analyze"
+        )
+
     report_json = {
+        "unscored_windows": unscored_windows,
         "executive_summary": {
             "features_monitored": len(ranked_features),
             "red": len(red_features),
@@ -225,6 +262,7 @@ async def generate_report(
         red_count=len(red_features),
         yellow_count=yellow_count,
         green_count=green_count,
+        unscored_windows=unscored_windows,
     )
 
     existing_result = await db.execute(
@@ -255,8 +293,9 @@ async def generate_report(
         existing.generated_at = now
         report = existing
 
-    await db.commit()
+    await db.flush()
     await db.refresh(report)
+    await db.commit()
     return report
 
 
@@ -278,7 +317,14 @@ async def get_latest_report_for_model(
     """Fetch latest health report for one model."""
     result = await db.execute(
         select(HealthReport)
-        .where(HealthReport.model_id == model_id)
+        .where(
+            HealthReport.model_id == model_id,
+            or_(
+                HealthReport.overall_score.is_not(None),
+                func.jsonb_array_length(HealthReport.report_json["unscored_windows"])
+                > 0,
+            ),
+        )
         .order_by(HealthReport.week_start.desc())
         .limit(1)
     )

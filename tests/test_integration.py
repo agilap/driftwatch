@@ -6,11 +6,13 @@ from datetime import date, datetime
 from uuid import UUID, uuid4
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import get_db
@@ -73,14 +75,7 @@ async def integration_context() -> (
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
 
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -220,7 +215,6 @@ async def test_full_pipeline_ingest_january_snapshot(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["drift_triggered"] is True
     assert set(body["features_recorded"]) == {
         "income",
         "credit_score",
@@ -988,7 +982,7 @@ async def test_model_health_agent_reports_real_demo_evidence(
 
     from driftwatch_mcp.server import build_server
     from examples.loan_risk_demo.config import FEATURES, SCENARIOS
-    from model_health_agent.graph import build_graph
+    from model_health_agent.investigate import investigate_model
 
     client, session_factory = integration_context
     model_id, *_ = await _demo_lifecycle(client, session_factory, tmp_path, monkeypatch)
@@ -1009,9 +1003,8 @@ async def test_model_health_agent_reports_real_demo_evidence(
     async with create_connected_server_and_client_session(
         server._mcp_server
     ) as mcp_session:
-        graph = build_graph(mcp_session)
-        report = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
-        second = (await graph.ainvoke({"model_id": str(model_id)}))["report"]
+        report = await investigate_model(mcp_session, str(model_id))
+        second = await investigate_model(mcp_session, str(model_id))
 
     assert report == second
     assert report["status"] == "critical"

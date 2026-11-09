@@ -35,6 +35,7 @@ def test_markdown_reports_statistic_without_inventing_pvalue() -> None:
     assert "| Feature | PSI | KS Statistic |" in markdown
     assert "Overall Health Score: 83.3/100 (GREEN)" in markdown
     assert "| income | 0.050 | 0.375 | 0.025 | 0.250 | green |" in markdown
+    assert "No immediate actions required." in markdown
     assert "p-value" not in markdown
     assert "Correlation" not in markdown
 
@@ -82,4 +83,6 @@ def test_no_evidence_health_remains_null_in_response_and_markdown() -> None:
     assert response["overall_score"] is None
     assert response["report_json"]["executive_summary"]["overall_score"] is None
     assert "Overall Health Score: No drift data available" in markdown
+    assert "No data for this period." in markdown
+    assert "No immediate actions required." not in markdown
     assert "100" not in markdown

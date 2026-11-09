@@ -30,6 +30,8 @@ def _require_test_database() -> str:
 
 # Must run before any app import: app.config reads DATABASE_URL at import time.
 os.environ["DATABASE_URL"] = _require_test_database()
+# Tests opt in to auth; a developer's own key must not turn every request into a 401.
+os.environ["DRIFTWATCH_API_KEY"] = ""
 
 from app.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402
@@ -72,3 +74,59 @@ async def background_session_factory(monkeypatch):
         yield
     finally:
         await engine.dispose()
+
+
+async def truncate_tables(session):
+    from sqlalchemy import text
+
+    await session.execute(
+        text(
+            "TRUNCATE TABLE alerts, health_reports, drift_scores, snapshots, "
+            "feature_importances, reference_distributions, models RESTART IDENTITY CASCADE"
+        )
+    )
+
+
+@pytest.fixture(scope="session")
+def run_migrations():
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+    command.upgrade(cfg, "head")
+
+
+@pytest_asyncio.fixture
+async def ctx(run_migrations):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(os.environ["DATABASE_URL"], future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await truncate_tables(session)
+        await session.commit()
+
+    async def _override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client, session_factory
+    app.dependency_overrides.pop(get_db, None)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(run_migrations):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(os.environ["DATABASE_URL"], future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await truncate_tables(session)
+        await session.commit()
+        yield session
+    await engine.dispose()

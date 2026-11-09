@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, timezone
 from uuid import UUID
@@ -7,20 +8,19 @@ from uuid import UUID
 import numpy as np
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from scipy.spatial.distance import jensenshannon
-from scipy.stats import chi2_contingency, ks_2samp
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.alert import Alert
 from app.models.drift_score import DriftScore
+from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.services import alert_service
 from app.services import importance_scorer
-from app.services.model_service import _compute_histogram
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,13 @@ def compute_js_divergence_from_counts(
     """Compute base-2 Jensen-Shannon divergence in [0, 1]."""
     ref, prod = _validate_counts(reference, production)
     p, q = _count_proportions(ref), _count_proportions(prod)
-    return float(np.clip(jensenshannon(p, q, base=2) ** 2, 0.0, 1.0))
+    m = (p + q) / 2
+    p_nonzero, q_nonzero = p > 0, q > 0
+    divergence = 0.5 * (
+        np.sum(p[p_nonzero] * np.log2(p[p_nonzero] / m[p_nonzero]))
+        + np.sum(q[q_nonzero] * np.log2(q[q_nonzero] / m[q_nonzero]))
+    )
+    return float(np.clip(divergence, 0.0, 1.0))
 
 
 def compute_binned_ks(reference: np.ndarray, production: np.ndarray) -> float:
@@ -107,79 +113,6 @@ def compute_binned_ks(reference: np.ndarray, production: np.ndarray) -> float:
             )
         )
     )
-
-
-def _sample_histogram_counts(
-    reference: np.ndarray, production: np.ndarray, bins: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Bin samples on shared reference edges, including out-of-range counts."""
-    ref, prod = _validate_inputs(reference, production)
-    if isinstance(bins, bool) or not isinstance(bins, (int, np.integer)) or bins < 1:
-        raise ValueError("bins must be a positive integer")
-    reference_histogram = _compute_histogram(ref.tolist(), bins=bins)
-    production_histogram = _compute_histogram(
-        prod.tolist(), bin_edges=reference_histogram["bin_edges"]
-    )
-    return tuple(
-        np.asarray([hist["underflow"], *hist["counts"], hist["overflow"]], dtype=float)
-        for hist in (reference_histogram, production_histogram)
-    )
-
-
-def compute_ks_test(
-    reference: np.ndarray, production: np.ndarray
-) -> dict[str, float | bool]:
-    """Compute two-sample Kolmogorov-Smirnov test.
-
-    Args:
-        reference: Reference (training) sample array.
-        production: Production sample array.
-
-    Returns:
-        Dictionary with KS statistic, p-value, and significance flag.
-    """
-    ref, prod = _validate_inputs(reference, production)
-    result = ks_2samp(ref, prod)
-    pvalue = float(result.pvalue)
-    return {
-        "statistic": float(result.statistic),
-        "pvalue": pvalue,
-        "significant": pvalue < settings.ks_pvalue_threshold,
-    }
-
-
-def compute_psi(reference: np.ndarray, production: np.ndarray, bins: int = 10) -> float:
-    """Compute uncapped PSI from samples using shared reference bins."""
-    return compute_psi_from_counts(
-        *_sample_histogram_counts(reference, production, bins)
-    )
-
-
-def compute_js_divergence(
-    reference: np.ndarray, production: np.ndarray, bins: int = 10
-) -> float:
-    """Compute base-2 Jensen-Shannon divergence from shared sample histograms."""
-    return compute_js_divergence_from_counts(
-        *_sample_histogram_counts(reference, production, bins)
-    )
-
-
-def compute_chi_square(
-    reference: np.ndarray, production: np.ndarray
-) -> dict[str, float | bool]:
-    """Compare aligned category count vectors with a contingency-table test."""
-    ref, prod = _validate_counts(reference, production)
-    table = np.asarray([ref, prod])
-    table = table[:, np.any(table > 0, axis=0)]
-    if table.shape[1] == 1:
-        return {"statistic": 0.0, "pvalue": 1.0, "significant": False}
-    result = chi2_contingency(table)
-    pvalue = float(result.pvalue)
-    return {
-        "statistic": float(result.statistic),
-        "pvalue": pvalue,
-        "significant": pvalue < settings.ks_pvalue_threshold,
-    }
 
 
 def classify_severity(psi: float) -> str:
@@ -306,6 +239,7 @@ async def run_drift_analysis(
     results: list[DriftScoreResult] = []
     severity_counts = {"red": 0, "yellow": 0, "green": 0}
     new_alerts = []
+    inserted_score = False
 
     for feature_name in shared_features:
         reference_histogram = reference_by_feature[feature_name].distribution
@@ -349,6 +283,7 @@ async def run_drift_analysis(
         existing = existing_result.scalar_one_or_none()
 
         if existing is None:
+            inserted_score = True
             db.add(
                 DriftScore(
                     model_id=model_id,
@@ -389,14 +324,27 @@ async def run_drift_analysis(
                 ),
                 severity="red",
                 window_date=window_date,
-                commit=False,
                 message=(
                     f"{label} PSI={psi:.3f} exceeds RED threshold on {window_date}"
                 ),
             )
 
-            if getattr(alert, "_dispatch_pending", False):
+            if alert is not None:
                 new_alerts.append(alert)
+        else:
+            await db.execute(
+                update(Alert)
+                .where(
+                    Alert.model_id == model_id,
+                    Alert.window_date == window_date,
+                    Alert.feature_name == feature_name,
+                    Alert.superseded_at.is_(None),
+                )
+                .values(
+                    superseded_at=computed_at,
+                    resolved_at=func.coalesce(Alert.resolved_at, computed_at),
+                )
+            )
 
         severity_counts[severity] += 1
         results.append(
@@ -414,11 +362,21 @@ async def run_drift_analysis(
             )
         )
 
+    if inserted_score:
+        await db.execute(
+            delete(HealthReport).where(
+                HealthReport.model_id == model_id,
+                HealthReport.week_start <= window_date,
+                HealthReport.week_end >= window_date,
+            )
+        )
     await db.commit()
     for alert in new_alerts:
         await db.refresh(alert)
-        await alert_service._dispatch_alert(alert)
-        alert._dispatch_pending = False
+    if new_alerts:
+        # End the refresh transaction so a slow webhook holds no database connection.
+        await db.commit()
+        await asyncio.gather(*map(alert_service._dispatch_alert, new_alerts))
 
     logger.info(
         "Drift analysis complete for model=%s window=%s features=%d red=%d yellow=%d green=%d",

@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: driftwatch
       POSTGRES_DB: driftwatch
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,11 +23,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@db:5432/driftwatch
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
-      REPORT_SCHEDULE_CRON: ${REPORT_SCHEDULE_CRON:-0 0 * * 1}
+      REPORT_SCHEDULE_CRON: ${REPORT_SCHEDULE_CRON:-0 0 * * *}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DRIFTWATCH_API_KEY: ${DRIFTWATCH_API_KEY:-}
       PSI_YELLOW_THRESHOLD: ${PSI_YELLOW_THRESHOLD:-0.10}
       PSI_RED_THRESHOLD: ${PSI_RED_THRESHOLD:-0.20}
-      KS_PVALUE_THRESHOLD: ${KS_PVALUE_THRESHOLD:-0.05}
       MIN_SAMPLE_WARNING: ${MIN_SAMPLE_WARNING:-200}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"

@@ -48,6 +48,11 @@ def wait_for_drift(client, identifier, date, timeout=60):
     raise TimeoutError(f"Timed out waiting for drift analysis for {date}")
 
 
+def api_headers():
+    key = os.environ.get("DRIFTWATCH_API_KEY")
+    return {"X-API-Key": key} if key else None
+
+
 def run(client):
     try:
         ready = client.get("/ready")
@@ -140,6 +145,7 @@ def main():
     try:
         with httpx.Client(
             base_url=os.environ.get("DRIFTWATCH_URL", "http://localhost:8000"),
+            headers=api_headers(),
             timeout=30,
         ) as client:
             run(client)

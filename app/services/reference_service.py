@@ -126,9 +126,8 @@ async def register_reference(
 
     importances_registered = bool(payload.feature_importances)
     if payload.feature_importances:
-        normalised = importance_scorer.import_from_json(
-            json_data=payload.feature_importances,
-            method=payload.importance_method or "manual",
+        normalised = importance_scorer.normalise_importances(
+            payload.feature_importances
         )
         await importance_scorer.replace_importances(
             db, payload.model_id, normalised, payload.importance_method

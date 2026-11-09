@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import Mock
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.config import Settings
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
 from app.models.reference_distribution import ReferenceDistribution
@@ -22,7 +28,7 @@ from scheduler import weekly_report
 from scheduler.weekly_report import run_weekly_reports_job
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def run_migrations() -> None:
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
@@ -30,18 +36,11 @@ def run_migrations() -> None:
 
 
 @pytest_asyncio.fixture
-async def sessions(monkeypatch):
+async def sessions(monkeypatch, run_migrations):
     engine = create_async_engine(os.environ["DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
     monkeypatch.setattr(weekly_report, "AsyncSessionLocal", factory)
     yield factory
@@ -50,7 +49,8 @@ async def sessions(monkeypatch):
 
 async def _model(sessions, name: str, with_window: bool = False) -> ModelRegistry:
     values = [1.0, 2.0, 3.0, 4.0] * 50
-    window = datetime.now(timezone.utc).date() - timedelta(days=1)
+    today = datetime.now(timezone.utc).date()
+    window = today - timedelta(days=today.weekday() + 1)
     async with sessions() as session:
         model = ModelRegistry(name=name)
         session.add(model)
@@ -94,6 +94,61 @@ async def _scores(sessions) -> dict:
     return {row.name: row.overall_score for row in rows}
 
 
+def test_default_cron_fires_every_day() -> None:
+    default = Settings.model_fields["report_schedule_cron"].default
+    trigger = CronTrigger.from_crontab(default, timezone="UTC")
+    now = datetime(2026, 11, 8, 12, tzinfo=timezone.utc)
+    assert trigger.get_next_fire_time(None, now) == datetime(
+        2026, 11, 9, tzinfo=timezone.utc
+    )
+
+    now = datetime(2026, 11, 9, 12, tzinfo=timezone.utc)
+    assert trigger.get_next_fire_time(None, now) == datetime(
+        2026, 11, 10, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("day", [9, 11, 15])
+async def test_job_reports_previous_monday_through_sunday(
+    sessions, monkeypatch, day
+) -> None:
+    model = await _model(sessions, "fixed-clock")
+    clock = Mock()
+    clock.now.return_value = datetime(2026, 11, day, tzinfo=timezone.utc)
+    monkeypatch.setattr(weekly_report, "datetime", clock)
+    calls = []
+
+    async def capture_report(**kwargs):
+        calls.append(kwargs)
+        return Mock(overall_score=None)
+
+    async def no_report(db, model_id, week_start):
+        return None
+
+    monkeypatch.setattr(weekly_report, "get_report_for_week", no_report)
+    monkeypatch.setattr(weekly_report, "generate_report", capture_report)
+    await run_weekly_reports_job()
+
+    assert len(calls) == 1
+    assert calls[0]["model_id"] == model.id
+    assert calls[0]["week_start"] == date(2026, 11, 2)
+    assert calls[0]["week_end"] == date(2026, 11, 8)
+
+
+@pytest.mark.asyncio
+async def test_start_weekly_scheduler_registers_job() -> None:
+    try:
+        weekly_report.start_weekly_scheduler()
+        job = weekly_report.weekly_scheduler.get_job("weekly-health-report")
+        assert job is not None
+        assert job.misfire_grace_time is None
+        assert isinstance(job.trigger, CronTrigger)
+    finally:
+        weekly_report.stop_weekly_scheduler()
+        await asyncio.sleep(0)
+
+
 @pytest.mark.asyncio
 async def test_job_scores_data_windows_and_nulls_empty_models(sessions) -> None:
     await _model(sessions, "with-data", with_window=True)
@@ -123,3 +178,43 @@ async def test_one_model_failing_does_not_stop_the_others(
     await run_weekly_reports_job()
     assert set(await _scores(sessions)) == {"b-works"}
     assert "Weekly report failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_existing_report_is_unchanged(sessions) -> None:
+    model = await _model(sessions, "existing")
+    await run_weekly_reports_job()
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        before = {
+            column.name: getattr(report, column.name)
+            for column in HealthReport.__table__.columns
+        }
+
+    await run_weekly_reports_job()
+
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        assert report.model_id == model.id
+        assert {
+            column.name: getattr(report, column.name)
+            for column in HealthReport.__table__.columns
+        } == before
+
+
+@pytest.mark.asyncio
+async def test_deleted_report_is_rebuilt(sessions) -> None:
+    model = await _model(sessions, "deleted")
+    await run_weekly_reports_job()
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        await session.delete(report)
+        await session.commit()
+
+    await run_weekly_reports_job()
+
+    today = datetime.now(timezone.utc).date()
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        assert report.model_id == model.id
+        assert report.week_start == today - timedelta(days=today.weekday() + 7)

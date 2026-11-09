@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AlertResponse(BaseModel):
     """Serialized alert row."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     model_id: UUID
+    window_date: date | None
     feature_name: str | None
     alert_type: str | None
     severity: str | None

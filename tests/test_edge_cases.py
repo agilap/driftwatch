@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.helpers import sample_psi
+
 import os
 from collections.abc import AsyncGenerator
 from uuid import uuid4
@@ -13,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.database import get_db
 from app.main import app
-from app.services.drift_engine import compute_psi
 
 
 def _database_url() -> str:
@@ -118,18 +119,18 @@ async def test_model_not_found_all_endpoints(edge_context: AsyncClient) -> None:
 
 
 def test_single_value_feature_psi() -> None:
-    psi = compute_psi(reference=[1.0], production=[1.0], bins=10)  # type: ignore[arg-type]
+    psi = sample_psi(reference=[1.0], production=[1.0], bins=10)  # type: ignore[arg-type]
     assert psi >= 0.0
 
 
 def test_identical_distributions_psi_near_zero() -> None:
     values = [1.0, 2.0, 3.0, 4.0, 5.0]
-    psi = compute_psi(reference=values, production=values, bins=10)  # type: ignore[arg-type]
+    psi = sample_psi(reference=values, production=values, bins=10)  # type: ignore[arg-type]
     assert psi < 1e-6
 
 
 def test_completely_different_distributions_psi_high() -> None:
     reference = [1.0] * 200
     production = [100.0] * 200
-    psi = compute_psi(reference=reference, production=production, bins=10)  # type: ignore[arg-type]
+    psi = sample_psi(reference=reference, production=production, bins=10)  # type: ignore[arg-type]
     assert psi > 0.20

@@ -45,11 +45,11 @@ sequenceDiagram
     A-->>C: Return report
 ```
 
-Analysis runs in process after the snapshot response. Wait for analysis to finish before generating a report, or call the analysis endpoint explicitly. Reports select the highest PSI for each feature in the requested seven-day period and score those features.
+Analysis runs in process after the snapshot response. Wait for analysis to finish before generating a report, or call the analysis endpoint explicitly. Reports select the highest PSI for each feature in the requested seven-day period and score those features. Reports list days with snapshots but no scores in `unscored_windows`.
 
 ## Technology stack
 
-Python, FastAPI, Pydantic, SQLAlchemy with asyncpg, PostgreSQL, Alembic, NumPy, SciPy, APScheduler, and Docker Compose form the service. The demo uses scikit-learn; the optional MCP server and agent use MCP and LangGraph respectively.
+Python, FastAPI, Pydantic, SQLAlchemy with asyncpg, PostgreSQL, Alembic, NumPy, APScheduler, and Docker Compose form the service. The demo uses scikit-learn; the optional MCP server uses MCP, and the model health agent provides automated analysis.
 
 ## Quick start
 
@@ -98,23 +98,28 @@ curl -fsS "http://localhost:8000/reports/$MODEL_ID/latest"
 
 The explicit analysis call also retries a failed background analysis. See `/docs` for all routes, including importances, snapshot retrieval, and alert resolution. The [Postman collection](examples/driftwatch.postman_collection.json) runs the whole flow in order: health, model creation (which saves `modelId`), reference, snapshot, analysis, drift, alerts, report generation, and latest report. Model names use a dynamic variable, so it can be rerun; try `npx newman run examples/driftwatch.postman_collection.json --env-var baseUrl=http://localhost:8000`.
 
+### Authentication
+
+Set `DRIFTWATCH_API_KEY` to require that key in an `X-API-Key` header on every route except `/health`, `/ready`, and the API docs; other requests return 401. Without it, authentication is off and startup logs a warning, so the local examples work unchanged. The MCP server, agent, and loan-risk demo send the key when `DRIFTWATCH_API_KEY` is in their environment; `make` and Compose pick up an exported value. In Postman, set the `apiKey` collection variable. Generate a key with `openssl rand -hex 32`.
+
 ### Replacement rules
 
 - **Snapshots:** posting to a date replaces that entire window. Batches are not accumulated, so a second same-day post discards the first, including any feature or predictions it omits. Features omitted from a window are not scored, and the weekly report counts only features that were analyzed, normalizing importance over them.
 - **Predictions:** a snapshot may include `predictions` only if the reference has them; otherwise it returns 422, like an unknown feature.
 - **References:** before any snapshot exists, re-registering replaces the whole reference. If the feature set changes and no importances are supplied, stored importances are deleted with a logged warning, and weighting falls back to equal weight. After snapshots exist, the reference is immutable and a changed payload returns 409.
 - **Importances:** a set must cover exactly the reference features, excluding predictions; explicit zeros are allowed. A non-matching set returns 422 naming the missing and unknown features, `POST /models/{id}/importances` returns 409 without a reference, and each accepted set replaces the previous one. Changing importances does not rewrite stored scores until the window is re-analyzed; reports generated afterwards use the current importances.
-- **Alerts:** when new data changes a window, all of that window's alerts are superseded: they are marked resolved, keeping any earlier resolution time, and remain listed under `resolved=true`. If the window is still red, analysis raises a new alert with a fresh message and webhook. An identical re-post changes nothing, and a manually resolved alert stays resolved through re-analysis.
+- **Reports:** Changed snapshot data for a day, or a retried analysis that adds scores for a day, deletes any report covering that day. The daily job rebuilds a missing report for the last complete Monday-to-Sunday week; older weeks need `POST /reports/{id}/generate`. An identical re-post keeps the report. Latest skips reports with no scores and no unscored windows.
+- **Alerts:** when new data changes a window, all of that window's alerts are superseded: they are marked resolved, keeping any earlier resolution time, and remain listed under `resolved=true`. If the window is still red, analysis raises a new alert with a fresh message and webhook. An identical re-post changes nothing, and a manually resolved alert stays resolved through re-analysis. Re-analysis that finds a feature in a window is no longer red, for example after a threshold change, supersedes that feature’s alert in the same way.
 
-Requests that fail schema validation return 422 with `detail`, `code`, and `errors` (`loc`, `msg`, `type` for each problem); feature names can appear in `loc` and `msg` because they are schema names, but sample values, `input`, and `ctx` are never returned, and logs record only `loc` and `type`. Importance values and samples must be JSON numbers, so booleans and numeric strings are rejected there. Checks against stored state or computed values return 422 with `detail` only: unknown features, importance coverage, and values too extreme to summarize or bin, such as `[-1e308, 1e308]`, all rejected before any row changes.
+Snapshot timestamps more than one day in the future and report `week_start` dates after today return 422. Requests that fail schema validation return 422 with `detail`, `code`, and `errors` (`loc`, `msg`, `type` for each problem); feature names can appear in `loc` and `msg` because they are schema names, but sample values, `input`, and `ctx` are never returned, and logs record only `loc` and `type`. Importance values and samples must be JSON numbers, so booleans and numeric strings are rejected there. Checks against stored state or computed values return 422 with `detail` only: unknown features, importance coverage, and values too extreme to summarize or bin, such as `[-1e308, 1e308]`, all rejected before any row changes.
 
 ## Statistical methodology
 
 Reference `bin_edges` are the only boundaries used for both populations: 10 equal-width bins over the reference range, plus underflow and overflow counts. Equal-width bins can represent skewed features poorly; quantile bins are a common alternative.
 
 - **PSI:** uncapped population stability index, with `EPSILON` smoothing and renormalization. With default thresholds, green is below 0.10, yellow is 0.10 through 0.20 inclusive, and red is above 0.20. These are operational heuristics, not significance tests.
-- **JS divergence:** base 2, computed as the square of SciPy's Jensen-Shannon distance, with range 0 to 1.
-- **KS:** `ks_statistic` is the maximum CDF difference over shared bins, a lower bound on the sample KS statistic. `ks_pvalue` is always null for histogram analysis because histograms cannot support a valid p-value. Raw samples are not retained, trading an exact test for reduced storage and privacy exposure. `compute_ks_test` accepts raw arrays only and is not used in the pipeline; `KS_PVALUE_THRESHOLD` affects only that helper and `compute_chi_square`.
+- **JS divergence:** base 2, computed from histogram proportions with NumPy, with range 0 to 1.
+- **KS:** `ks_statistic` is the maximum CDF difference over shared bins, a lower bound on the sample KS statistic. `ks_pvalue` is always null for histogram analysis because histograms cannot support a valid p-value. Raw samples are not retained, trading an exact test for reduced storage and privacy exposure.
 - **Weighting:** `weighted_score = normalized importance * min(PSI / PSI_RED_THRESHOLD, 1)`. Importance is normalized over analyzed features; if every analyzed feature with a stored importance is zero, all their weights are zero, and equal weight applies only when none has a stored importance. Health is `100 * (1 - sum(weighted_score))`; no feature evidence produces a null score. Predictions are scored and can alert as `output_shift`, but have zero weight in health.
 
 Sampling noise matters. `python3 -m examples.psi_noise` draws both samples from a standard normal distribution, with a fresh 50,000-row reference and 10 bins, over 500 seeded trials per window size:
@@ -199,7 +204,7 @@ Optional OpenAI-compatible narration cannot change the route or evidence; its nu
 The test suite requires PostgreSQL and a `TEST_DATABASE_URL` pointing to a dedicated database. Tests truncate tables, so pytest exits before running anything if the variable is unset or its database name does not end in `_test`. To use a separate database in the Compose PostgreSQL on host port 5433:
 
 ```bash
-python3 -m pip install -r requirements-demo.txt -r requirements-agent.txt
+python3 -m pip install -r requirements-demo.txt -r requirements-agent.txt -r requirements-dev.txt
 POSTGRES_PORT=5433 docker compose up -d --wait db
 docker compose exec db createdb -U driftwatch driftwatch_test
 export TEST_DATABASE_URL=postgresql+asyncpg://driftwatch:driftwatch@localhost:5433/driftwatch_test
@@ -208,7 +213,7 @@ ruff check .
 black --check .
 ```
 
-`make test` starts the database, creates `driftwatch_test` if it is missing, and runs pytest.
+`make test` requires `requirements-dev.txt` installed in its environment; it starts the database, creates `driftwatch_test` if it is missing, and runs pytest.
 
 The CI workflow runs Ruff, Black, PostgreSQL-backed tests with coverage, and a Compose smoke test including the demo and offline agent.
 
@@ -223,10 +228,10 @@ The CI workflow runs Ruff, Black, PostgreSQL-backed tests with coverage, and a C
 
 ## Limitations
 
-- There is no authentication or authorization. Do not expose this service publicly.
+- Authentication is one shared API key, off unless `DRIFTWATCH_API_KEY` is set. There are no users, roles, or per-model permissions, and the service does not terminate TLS, so put it behind HTTPS before exposing it.
 - Demo data is synthetic. There is no deployment or real-world monitoring claim.
-- Only numeric features can be ingested. `compute_chi_square` is tested but unused; categorical ingestion is absent.
-- There is no distributed queue, automatic crash recovery, or durable webhook outbox. Webhook delivery is best effort; the weekly scheduler runs in process.
+- Only numeric features can be ingested; categorical ingestion is absent.
+- There is no distributed queue, automatic crash recovery, or durable webhook outbox. Webhook delivery is best effort; the report scheduler runs in process. If the API is stopped for a whole week, that week’s report needs a manual generate.
 - Equal-width bins can obscure skewed distributions, and small windows can produce noisy alerts.
 - Alerts are per window and threshold based, not significance tests.
 - The alert API does not distinguish superseded alerts from manually resolved ones; both appear under `resolved=true`.

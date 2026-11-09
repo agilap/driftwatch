@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.schemas.ingest import has_unstorable_text
+from app.schemas.ingest import MAX_NAME_LENGTH, has_unstorable_text
 
 
 class ModelCreate(BaseModel):
@@ -18,6 +18,10 @@ class ModelCreate(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("model name must not be blank")
+        if len(value) > MAX_NAME_LENGTH:
+            raise ValueError("model name must be at most 255 characters")
+        if not value.isprintable():
+            raise ValueError("model name must contain only printable characters")
         if has_unstorable_text(value):
             raise ValueError("model name must not contain NUL or invalid characters")
         return value

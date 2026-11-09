@@ -4,11 +4,12 @@ import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.auth import require_api_key, valid_api_key
 from app.config import settings
 from app.database import check_database_readiness, engine
 from app.routers import alerts, drift, ingest, models, reports
@@ -18,6 +19,8 @@ logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+# httpx request logs can expose secret tokens in webhook URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("driftwatch")
 
 
@@ -25,6 +28,8 @@ logger = logging.getLogger("driftwatch")
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown lifecycle events."""
     logger.info("DriftWatch API starting up")
+    if not settings.api_key:
+        logger.warning("DRIFTWATCH_API_KEY is not set: API authentication is disabled")
     try:
         await asyncio.wait_for(check_database_readiness(), timeout=5.0)
         start_weekly_scheduler()
@@ -42,12 +47,26 @@ app = FastAPI(title="DriftWatch", version="0.2.0", lifespan=lifespan)
 async def request_logging_middleware(request: Request, call_next):
     """Log one line per request with method/path/status/duration."""
     start = time.perf_counter()
-    response = await call_next(request)
+    if request.scope["path"] not in {
+        "/health",
+        "/ready",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+        "/openapi.json",
+    } and not valid_api_key(request.headers.get("X-API-Key")):
+        response = JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing API key"},
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    else:
+        response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
     logger.info(
         "method=%s path=%s status_code=%s duration_ms=%.2f",
         request.method,
-        request.url.path,
+        request.scope["path"],
         response.status_code,
         duration_ms,
     )
@@ -115,12 +134,13 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
     )
 
 
-app.include_router(models.router, prefix="/models")
-app.include_router(ingest.router, prefix="/ingest")
-app.include_router(ingest.model_importance_router)
-app.include_router(drift.router, prefix="/drift")
-app.include_router(reports.router, prefix="/reports")
-app.include_router(alerts.router, prefix="/alerts")
+protected = [Depends(require_api_key)]
+app.include_router(models.router, prefix="/models", dependencies=protected)
+app.include_router(ingest.router, prefix="/ingest", dependencies=protected)
+app.include_router(ingest.model_importance_router, dependencies=protected)
+app.include_router(drift.router, prefix="/drift", dependencies=protected)
+app.include_router(reports.router, prefix="/reports", dependencies=protected)
+app.include_router(alerts.router, prefix="/alerts", dependencies=protected)
 
 
 @app.get("/health")

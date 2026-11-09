@@ -23,9 +23,8 @@ async def create_alert(
     severity: str,
     message: str,
     window_date: date | None = None,
-    commit: bool = True,
-) -> Alert:
-    """Create an alert row and dispatch webhook asynchronously.
+) -> Alert | None:
+    """Add and flush an alert unless one already exists for the window.
 
     Args:
             db: Database session.
@@ -36,7 +35,7 @@ async def create_alert(
             message: Human-readable message.
 
     Returns:
-            Persisted alert ORM object.
+            New alert ORM object, or None if the alert already exists.
     """
     if window_date is not None:
         existing = await db.execute(
@@ -50,7 +49,7 @@ async def create_alert(
         )
         row = existing.scalar_one_or_none()
         if row is not None:
-            return row
+            return None
 
     alert = Alert(
         window_date=window_date,
@@ -62,11 +61,6 @@ async def create_alert(
     )
     db.add(alert)
     await db.flush()
-    alert._dispatch_pending = True
-    if commit:
-        await db.commit()
-        await db.refresh(alert)
-        await _dispatch_alert(alert)
     return alert
 
 
@@ -86,6 +80,7 @@ async def _dispatch_alert(alert: Alert) -> None:
     payload = {
         "alert_id": str(alert.id),
         "model_id": str(alert.model_id),
+        "window_date": alert.window_date.isoformat() if alert.window_date else None,
         "feature_name": alert.feature_name,
         "alert_type": alert.alert_type,
         "severity": alert.severity,

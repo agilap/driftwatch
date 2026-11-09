@@ -1,8 +1,6 @@
 """Deterministic model health investigation over an MCP session."""
 
-from typing import Any, TypedDict
-
-from langgraph.graph import END, START, StateGraph
+from typing import Any
 
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from model_health_agent.narration import narrate_report
@@ -16,18 +14,9 @@ class ToolError(Exception):
         super().__init__(message)
 
 
-class State(TypedDict, total=False):
-    model_id: str
-    health: dict
-    findings: list[dict]
-    report: dict
-
-
-def triage(state: State) -> str:
+def triage(health: dict) -> str:
     return (
-        "investigate"
-        if state["health"]["status"] in ("critical", "attention")
-        else "summarize"
+        "investigate" if health["status"] in ("critical", "attention") else "summarize"
     )
 
 
@@ -39,8 +28,8 @@ def mean_direction(direction):
     return "the window mean direction is unavailable"
 
 
-def build_graph(session, narrate=None):
-    """Build a graph using an initialized MCP session."""
+async def investigate_model(session, model_id, narrate=None) -> dict:
+    """Investigate a model using an initialized MCP session."""
 
     async def call(name: str, **arguments: Any) -> dict:
         result = await session.call_tool(name, arguments)
@@ -52,20 +41,14 @@ def build_graph(session, narrate=None):
             )
         return result.structuredContent
 
-    async def collect(state: State) -> dict:
-        return {
-            "health": await call("analyze_model_health", model_id=state["model_id"])
-        }
-
-    async def investigate(state: State) -> dict:
-        health = state["health"]
+    async def investigate(health: dict) -> list:
         names = [row["feature_name"] for row in health["problem_features"][:3]]
         if health["prediction_severity"] not in (None, "green"):
             names.append(PREDICTIONS_FEATURE_NAME)
         findings = []
         for name in names:
             args = {
-                "model_id": state["model_id"],
+                "model_id": model_id,
                 "window_date": health["latest_window"],
             }
             drift = await call(
@@ -100,20 +83,17 @@ def build_graph(session, narrate=None):
                         a
                         for a in health["active_alerts"]
                         if a.get("feature_name") == name
+                        and a.get("window_date") == health["latest_window"]
                     ],
                 }
             )
-        return {"findings": findings}
+        return findings
 
-    async def summarize(state: State) -> dict:
-        return {"findings": []}
-
-    async def report(state: State) -> dict:
-        health = state["health"]
+    async def report(health: dict, findings: list) -> dict:
         status = health["status"]
         recommendations = []
         if status in ("critical", "attention"):
-            for finding in state["findings"]:
+            for finding in findings:
                 if finding["feature_name"] == PREDICTIONS_FEATURE_NAME:
                     continue
                 recommendations.append(
@@ -124,11 +104,7 @@ def build_graph(session, narrate=None):
             )
         if health["prediction_severity"] not in (None, "green"):
             prediction = next(
-                (
-                    f
-                    for f in state["findings"]
-                    if f["feature_name"] == PREDICTIONS_FEATURE_NAME
-                ),
+                (f for f in findings if f["feature_name"] == PREDICTIONS_FEATURE_NAME),
                 None,
             )
             direction = prediction["direction"] if prediction else None
@@ -148,40 +124,36 @@ def build_graph(session, narrate=None):
             )
         elif status == "healthy":
             recommendations.append("Continue monitoring.")
+        latest_snapshot = health["latest_snapshot"]
+        unscored_snapshot = (
+            latest_snapshot is not None and latest_snapshot != health["latest_window"]
+        )
+        for day in health["unscored_windows"]:
+            recommendations.append(
+                f"Retry analysis for {day}: POST /drift/{model_id}/{day}/analyze"
+            )
         result = {
             "model": health["model"],
             "status": status,
             "evidence": {
                 "window": health["latest_window"],
+                "latest_snapshot": latest_snapshot,
+                "unscored_windows": health["unscored_windows"],
                 "severity_counts": health["severity_counts"],
                 "prediction_severity": health["prediction_severity"],
                 "overall_score": health["overall_score"],
                 "report_covers_latest_window": health["report_covers_latest_window"],
             },
-            "findings": state["findings"],
-            "stable_features": health["stable_features"],
+            "findings": findings,
+            "stable_features": [] if unscored_snapshot else health["stable_features"],
             "active_alerts": health["active_alerts"],
             "recommendations": recommendations,
             "limitations": health["limitations"],
             "mode": "offline",
             "narrative": None,
         }
-        return {"report": await (narrate or narrate_report)(result)}
+        return await (narrate or narrate_report)(result)
 
-    # Synchronous routing can hang when the graph runs repeatedly.
-    async def route(state: State) -> str:
-        return triage(state)
-
-    graph = StateGraph(State)
-    graph.add_node("collect", collect)
-    graph.add_node("investigate", investigate)
-    graph.add_node("summarize", summarize)
-    graph.add_node("report", report)
-    graph.add_edge(START, "collect")
-    graph.add_conditional_edges(
-        "collect", route, {"investigate": "investigate", "summarize": "summarize"}
-    )
-    graph.add_edge("investigate", "report")
-    graph.add_edge("summarize", "report")
-    graph.add_edge("report", END)
-    return graph.compile()
+    health = await call("analyze_model_health", model_id=model_id)
+    findings = await investigate(health) if triage(health) == "investigate" else []
+    return await report(health, findings)

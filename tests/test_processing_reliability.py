@@ -9,11 +9,7 @@ from app.routers.ingest import analyze_snapshot_in_background
 from app.services.alert_service import create_alert
 
 
-# Reuse the PostgreSQL isolation fixtures already used by the alert suite.
-from tests.test_alert_service import (
-    db_session as db_session,
-    run_migrations as run_migrations,
-)
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 def test_latest_drift_route_precedes_date_route():
@@ -71,9 +67,34 @@ async def test_alert_participates_in_callers_transaction():
             severity="red",
             message="shift",
             window_date=date(2026, 1, 1),
-            commit=False,
         )
     session.flush.assert_awaited_once()
+    session.commit.assert_not_awaited()
+    dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_alert_is_not_created_or_dispatched():
+    session = AsyncMock()
+    session.add = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = object()
+    session.execute.return_value = result
+    with patch(
+        "app.services.alert_service._dispatch_alert", new=AsyncMock()
+    ) as dispatch:
+        alert = await create_alert(
+            db=session,
+            model_id=uuid4(),
+            feature_name="income",
+            alert_type="drift_red",
+            severity="red",
+            message="shift",
+            window_date=date(2026, 1, 1),
+        )
+    assert alert is None
+    session.add.assert_not_called()
+    session.flush.assert_not_awaited()
     session.commit.assert_not_awaited()
     dispatch.assert_not_awaited()
 
@@ -119,7 +140,7 @@ async def _seed_shifted_model(session):
 
 @pytest.mark.asyncio
 async def test_failed_analysis_does_not_commit_partial_scores_or_alerts(
-    db_session,  # noqa: F811
+    db_session,
 ):
     from sqlalchemy import select
     from app.models.alert import Alert
@@ -163,7 +184,7 @@ async def test_failed_analysis_does_not_commit_partial_scores_or_alerts(
 
 @pytest.mark.asyncio
 async def test_concurrent_analysis_deduplicates_alerts_and_scores(
-    db_session,  # noqa: F811
+    db_session,
 ):
     import asyncio
     from sqlalchemy import select

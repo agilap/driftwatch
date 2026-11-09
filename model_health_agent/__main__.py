@@ -10,7 +10,8 @@ from uuid import UUID
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from model_health_agent.graph import ToolError, build_graph
+from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
+from model_health_agent.investigate import ToolError, investigate_model
 
 
 async def run(model_id):
@@ -28,9 +29,7 @@ async def run(model_id):
         async with ClientSession(*streams) as session:
             await session.initialize()
             try:
-                report = (await build_graph(session).ainvoke({"model_id": model_id}))[
-                    "report"
-                ]
+                report = await investigate_model(session, model_id)
             except ToolError as exc:
                 error = exc
     if error is not None:
@@ -51,6 +50,8 @@ def render_report(report):
         f"\nStatus: **{report['status']}**",
         "\n## Evidence\n",
         f"- Window: {evidence['window']}",
+        f"- Latest snapshot: {evidence['latest_snapshot'] if evidence['latest_snapshot'] is not None else 'not available'}",
+        f"- Unscored windows: {', '.join(evidence['unscored_windows']) or 'none'}",
         "- Severity counts: "
         + ", ".join(
             f"{name}: {count}" for name, count in evidence["severity_counts"].items()
@@ -64,7 +65,7 @@ def render_report(report):
         drift = finding["drift"]
         name = (
             "Model predictions"
-            if finding["feature_name"] == "__predictions__"
+            if finding["feature_name"] == PREDICTIONS_FEATURE_NAME
             else finding["feature_name"]
         )
         count = len(finding["alerts"])

@@ -6,11 +6,13 @@ from datetime import date, datetime
 from uuid import UUID, uuid4
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import get_db
@@ -73,14 +75,7 @@ async def integration_context() -> (
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
 
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:

@@ -1,5 +1,7 @@
 """Database-free statistical oracles for aligned persisted histogram counts."""
 
+from tests.helpers import sample_psi
+
 import numpy as np
 import pytest
 from scipy.spatial.distance import jensenshannon
@@ -8,7 +10,6 @@ from scipy.stats import ks_2samp
 from app.services.drift_engine import (
     compute_binned_ks,
     compute_js_divergence_from_counts,
-    compute_psi,
     compute_psi_from_counts,
 )
 
@@ -85,22 +86,22 @@ def test_count_metrics_reject_invalid_inputs(metric, ref, prod) -> None:
 @pytest.mark.parametrize("values", [[], [np.nan], [np.inf], [[1, 2]]])
 def test_sample_metrics_reject_invalid_inputs(values) -> None:
     with pytest.raises(ValueError):
-        compute_psi(values, [1, 2])
+        sample_psi(values, [1, 2])
     with pytest.raises(ValueError):
-        compute_psi([1, 2], values)
+        sample_psi([1, 2], values)
 
 
 @pytest.mark.parametrize("bins", [0, -1, 1.5, True, "10", None])
 def test_sample_metrics_reject_invalid_bin_counts(bins) -> None:
     with pytest.raises(ValueError):
-        compute_psi([-2, -1], [-1, 0], bins=bins)
+        sample_psi([-2, -1], [-1, 0], bins=bins)
 
 
 def test_negative_samples_constants_and_small_samples_are_valid() -> None:
-    assert compute_psi([-2], [-2]) == pytest.approx(0.0)
-    assert compute_psi([-2, -1], [-2, -1]) == pytest.approx(0.0)
-    assert np.isfinite(compute_psi([-2], [-1]))
-    assert compute_psi([-2], [-1]) > 0
+    assert sample_psi([-2], [-2]) == pytest.approx(0.0)
+    assert sample_psi([-2, -1], [-2, -1]) == pytest.approx(0.0)
+    assert np.isfinite(sample_psi([-2], [-1]))
+    assert sample_psi([-2], [-1]) > 0
 
 
 def test_small_change_is_smaller_than_significant_shift() -> None:

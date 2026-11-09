@@ -14,7 +14,7 @@ from driftwatch_mcp.server import build_server
 import model_health_agent.__main__ as agent_main
 from model_health_agent.__main__ import render_report
 from model_health_agent.investigate import ToolError, investigate_model, mean_direction
-from model_health_agent.narration import _supported, narrate_report
+from model_health_agent.narration import _numbers, _supported, narrate_report
 
 MODEL_ID = str(uuid4())
 WINDOW = "2026-01-07"
@@ -41,13 +41,15 @@ def row(name, severity, score=0.0):
     }
 
 
-def api(rows, calls, *, fail_reference=False, missing_mean=False, snapshot=WINDOW):
+def api(
+    rows, calls, *, fail_reference=False, missing_mean=False, snapshot=WINDOW, older=()
+):
     def handle(request):
         path = request.url.path
         calls.append(path)
         routes = {
             f"/models/{MODEL_ID}": {"id": MODEL_ID, "name": "test"},
-            f"/ingest/snapshots/{MODEL_ID}": [snapshot] if snapshot else [],
+            f"/ingest/snapshots/{MODEL_ID}": [snapshot, *older] if snapshot else [],
             f"/drift/{MODEL_ID}/latest": {"window_date": WINDOW},
             f"/drift/{MODEL_ID}/{WINDOW}": rows,
             f"/alerts/{MODEL_ID}": {
@@ -91,6 +93,10 @@ def api(rows, calls, *, fail_reference=False, missing_mean=False, snapshot=WINDO
                 for i, r in enumerate(rows)
             ],
         }
+        for day in ([snapshot] if snapshot and snapshot != WINDOW else []) + list(
+            older
+        ):
+            routes[f"/drift/{MODEL_ID}/{day}"] = []
         if fail_reference and path == f"/ingest/reference/{MODEL_ID}":
             return httpx.Response(500, json={"detail": "broken reference"})
         if path not in routes:
@@ -110,6 +116,7 @@ async def run_agent(
     repeat=False,
     missing_mean=False,
     snapshot=WINDOW,
+    older=(),
 ):
     async with api(
         rows,
@@ -117,6 +124,7 @@ async def run_agent(
         fail_reference=fail_reference,
         missing_mean=missing_mean,
         snapshot=snapshot,
+        older=older,
     ) as client:
         server = build_server(client)
         async with create_connected_server_and_client_session(
@@ -142,7 +150,7 @@ async def run_agent(
 )
 async def test_status_routes_without_narrator(rows, status, investigated):
     calls = []
-    report = await run_agent(rows, calls)
+    report = await run_agent(rows, calls, snapshot=WINDOW if rows else None)
     assert report["status"] == status
     assert bool(report["findings"]) is investigated
     assert any("/reference/" in path for path in calls) is investigated
@@ -328,6 +336,7 @@ def test_render_report():
         "evidence": {
             "window": WINDOW,
             "latest_snapshot": None,
+            "unscored_windows": [],
             "severity_counts": {"red": 1, "yellow": 0, "green": 2},
             "prediction_severity": "red",
             "overall_score": 16.092416981516312,
@@ -353,6 +362,7 @@ def test_render_report():
     output = render_report(report)
     assert "- Window: 2026-01-07" in output
     assert "- Latest snapshot: not available" in output
+    assert "- Unscored windows: none" in output
     assert "- Severity counts: red: 1, yellow: 0, green: 2" in output
     assert "- Prediction severity: red" in output
     assert "- Overall score: 16.1" in output
@@ -407,6 +417,14 @@ def test_supported_skips_unroundable_evidence():
     assert not _supported("score 0.51", {"big": 1e30, "a": 0.5})
 
 
+def test_supported_thousands_separators():
+    assert _supported("mean 69,828.852", {"window_mean": 69828.852})
+    assert _supported("mean 69828.852", {"window_mean": 69828.852})
+    assert not _supported("mean 69,828.999", {"window_mean": 69828.852})
+    assert _supported("mean 69828.852", {"value": "mean 69,828.852"})
+    assert [str(n) for n in _numbers("1,2")] == ["1", "2"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("snapshot", [WINDOW, "2026-01-08"])
 async def test_latest_snapshot_evidence_and_unscored_recommendation(snapshot):
@@ -426,3 +444,17 @@ async def test_latest_snapshot_evidence_and_unscored_recommendation(snapshot):
         )
         assert report["stable_features"] == []
         assert retry in report["recommendations"]
+
+
+@pytest.mark.asyncio
+async def test_older_unscored_windows_get_retries_and_keep_stable_features():
+    days = ["2026-01-06", "2026-01-05"]
+    report = await run_agent([row("stable", "green")], [], older=days)
+    assert report["status"] == "unknown"
+    assert report["evidence"]["unscored_windows"] == days
+    assert report["stable_features"] == ["stable"]
+    assert [r for r in report["recommendations"] if r.startswith("Retry analysis")] == [
+        f"Retry analysis for {day}: POST /drift/{MODEL_ID}/{day}/analyze"
+        for day in days
+    ]
+    assert "- Unscored windows: 2026-01-06, 2026-01-05" in render_report(report)

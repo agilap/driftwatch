@@ -8,11 +8,13 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
@@ -38,14 +40,7 @@ async def sessions(monkeypatch, run_migrations):
     engine = create_async_engine(os.environ["DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
     monkeypatch.setattr(weekly_report, "AsyncSessionLocal", factory)
     yield factory

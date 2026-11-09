@@ -7,7 +7,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 import app.database as database
 from model_health_agent.narration import narrate_report
-from tests.test_reliability_fixes import run_migrations  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 @pytest.mark.asyncio

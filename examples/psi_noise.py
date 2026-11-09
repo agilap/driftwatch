@@ -11,7 +11,8 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://unused@localhost/unu
 import numpy as np  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.services.drift_engine import compute_psi  # noqa: E402
+from app.services.drift_engine import compute_psi_from_counts  # noqa: E402
+from app.services.model_service import _compute_histogram  # noqa: E402
 
 SEED = 42
 REFERENCE_SIZE = 50_000
@@ -22,16 +23,18 @@ WINDOW_SIZES = (50, 100, 500, 2_000, 10_000)
 
 def measure(window_size: int, trials: int, rng: np.random.Generator) -> np.ndarray:
     """Return one PSI per trial, each from fresh standard normal samples."""
-    return np.array(
-        [
-            compute_psi(
-                rng.standard_normal(REFERENCE_SIZE),
-                rng.standard_normal(window_size),
-                bins=BINS,
-            )
-            for _ in range(trials)
-        ]
-    )
+
+    def counts(hist):
+        return [hist["underflow"], *hist["counts"], hist["overflow"]]
+
+    result = []
+    for _ in range(trials):
+        reference = _compute_histogram(rng.standard_normal(REFERENCE_SIZE), bins=BINS)
+        production = _compute_histogram(
+            rng.standard_normal(window_size), bin_edges=reference["bin_edges"]
+        )
+        result.append(compute_psi_from_counts(counts(reference), counts(production)))
+    return np.array(result)
 
 
 def main() -> None:

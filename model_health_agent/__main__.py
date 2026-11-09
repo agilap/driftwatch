@@ -51,6 +51,7 @@ def render_report(report):
         "\n## Evidence\n",
         f"- Window: {evidence['window']}",
         f"- Latest snapshot: {evidence['latest_snapshot'] if evidence['latest_snapshot'] is not None else 'not available'}",
+        f"- Unscored windows: {', '.join(evidence['unscored_windows']) or 'none'}",
         "- Severity counts: "
         + ", ".join(
             f"{name}: {count}" for name, count in evidence["severity_counts"].items()

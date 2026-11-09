@@ -12,18 +12,13 @@ from app.models.snapshot import Snapshot
 from app.schemas.ingest import SnapshotPayload
 from app.services.importance_scorer import upsert_importances
 from app.services.snapshot_service import ingest_snapshot
-from tests.test_reliability_fixes import (
-    ctx,  # noqa: F401
-    _model,
-    _reference,
-    run_migrations,  # noqa: F401
-)
+from tests.helpers import _model, _reference
+
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 @pytest.mark.asyncio
-async def test_importances_return_after_concurrent_deletion(
-    ctx, monkeypatch  # noqa: F811
-):  # noqa: F811
+async def test_importances_return_after_concurrent_deletion(ctx, monkeypatch):
     client, factory = ctx
     model_id = await _model(client)
     await _reference(client, model_id)
@@ -51,7 +46,7 @@ async def test_importances_return_after_concurrent_deletion(
 
 
 @pytest.mark.asyncio
-async def test_stats_only_snapshot_change_invalidates_evidence(ctx):  # noqa: F811
+async def test_stats_only_snapshot_change_invalidates_evidence(ctx):
     client, factory = ctx
     model_id = await _model(client)
     await _reference(client, model_id)
@@ -103,7 +98,7 @@ async def test_stats_only_snapshot_change_invalidates_evidence(ctx):  # noqa: F8
 
 
 @pytest.mark.asyncio
-async def test_analyze_without_reference_returns_conflict(ctx):  # noqa: F811
+async def test_analyze_without_reference_returns_conflict(ctx):
     client, _ = ctx
     model_id = await _model(client)
     response = await client.post(f"/drift/{model_id}/{date(2026, 2, 2)}/analyze")

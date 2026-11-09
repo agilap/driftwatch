@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -73,7 +73,15 @@ def _render_markdown_report(
             f"{feature_count} features monitored. {red_count} critical, "
             f"{yellow_count} moderate, {green_count} stable."
         ),
-        (recommendations[0] if recommendations else "No immediate actions required."),
+        (
+            recommendations[0]
+            if recommendations
+            else (
+                "No immediate actions required."
+                if ranked_rows
+                else "No data for this period."
+            )
+        ),
         *(
             [f"Warning: snapshots have no scores for {', '.join(unscored_windows)}."]
             if unscored_windows
@@ -309,7 +317,14 @@ async def get_latest_report_for_model(
     """Fetch latest health report for one model."""
     result = await db.execute(
         select(HealthReport)
-        .where(HealthReport.model_id == model_id)
+        .where(
+            HealthReport.model_id == model_id,
+            or_(
+                HealthReport.overall_score.is_not(None),
+                func.jsonb_array_length(HealthReport.report_json["unscored_windows"])
+                > 0,
+            ),
+        )
         .order_by(HealthReport.week_start.desc())
         .limit(1)
     )

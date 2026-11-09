@@ -9,11 +9,7 @@ from app.routers.ingest import analyze_snapshot_in_background
 from app.services.alert_service import create_alert
 
 
-# Reuse the PostgreSQL isolation fixtures already used by the alert suite.
-from tests.test_alert_service import (
-    db_session as db_session,
-    run_migrations as run_migrations,
-)
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 def test_latest_drift_route_precedes_date_route():
@@ -144,7 +140,7 @@ async def _seed_shifted_model(session):
 
 @pytest.mark.asyncio
 async def test_failed_analysis_does_not_commit_partial_scores_or_alerts(
-    db_session,  # noqa: F811
+    db_session,
 ):
     from sqlalchemy import select
     from app.models.alert import Alert
@@ -188,7 +184,7 @@ async def test_failed_analysis_does_not_commit_partial_scores_or_alerts(
 
 @pytest.mark.asyncio
 async def test_concurrent_analysis_deduplicates_alerts_and_scores(
-    db_session,  # noqa: F811
+    db_session,
 ):
     import asyncio
     from sqlalchemy import select

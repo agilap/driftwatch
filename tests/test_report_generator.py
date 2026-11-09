@@ -6,11 +6,17 @@ from datetime import date
 from uuid import uuid4
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from httpx import ASGITransport, AsyncClient
+
+from app.database import get_db
+from app.main import app
 
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
@@ -38,14 +44,7 @@ async def db_session(run_migrations: None) -> AsyncGenerator[AsyncSession, None]
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
         yield session
 
@@ -538,3 +537,76 @@ async def test_webhook_non_2xx_logs_error_without_url(caplog) -> None:
     )
     assert "dispatched successfully" not in caplog.text
     assert url not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("high_day", [date(2026, 3, 16), date(2026, 3, 22)])
+async def test_report_selects_highest_psi_in_either_date_order(
+    db_session: AsyncSession, high_day: date
+) -> None:
+    model = await _create_model(db_session)
+    week_start = date(2026, 3, 16)
+    await _insert_week_drift(
+        db_session, model.id, week_start, [{"feature_name": "income", "psi": 0.05}]
+    )
+    await db_session.execute(
+        update(DriftScore)
+        .where(DriftScore.model_id == model.id, DriftScore.window_date == high_day)
+        .values(psi=0.35)
+    )
+    await db_session.commit()
+
+    report = await generate_report(db_session, model.id, week_start, date(2026, 3, 22))
+    assert report.report_json["feature_drift_summary"][0]["psi"] == pytest.approx(0.35)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newer_windows", [[], ["2026-03-23"]])
+async def test_latest_report_requires_evidence(
+    db_session: AsyncSession, newer_windows: list[str]
+) -> None:
+    model = await _create_model(db_session)
+    earlier = HealthReport(
+        model_id=model.id,
+        week_start=date(2026, 3, 16),
+        week_end=date(2026, 3, 22),
+        overall_score=80,
+        report_json={},
+    )
+    newer = HealthReport(
+        model_id=model.id,
+        week_start=date(2026, 3, 23),
+        week_end=date(2026, 3, 29),
+        overall_score=None,
+        report_json={"unscored_windows": newer_windows},
+    )
+    db_session.add_all([earlier, newer])
+    await db_session.commit()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            latest = await client.get(f"/reports/{model.id}/latest")
+            assert latest.status_code == 200
+            assert latest.json()["id"] == str(newer.id if newer_windows else earlier.id)
+            week = await client.get(f"/reports/{model.id}/2026-03-23")
+            assert week.status_code == 200
+            assert week.json()["id"] == str(newer.id)
+            listing = await client.get(f"/reports/{model.id}")
+            assert listing.status_code == 200
+            assert {item["id"] for item in listing.json()["items"]} == {
+                str(earlier.id),
+                str(newer.id),
+            }
+            await db_session.delete(earlier)
+            if newer_windows:
+                newer.report_json = {"unscored_windows": []}
+            await db_session.commit()
+            assert (await client.get(f"/reports/{model.id}/latest")).status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_db, None)

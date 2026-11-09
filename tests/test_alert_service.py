@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import os
 from datetime import date
-from collections.abc import AsyncGenerator
 from uuid import UUID, uuid4
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
-from alembic import command
-from alembic.config import Config
 from fastapi import HTTPException
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert
 from app.models.model_registry import ModelRegistry
@@ -28,37 +23,7 @@ from app.services.drift_engine import run_drift_analysis
 from app.services.model_service import _compute_distribution_stats, _compute_histogram
 
 
-def _database_url() -> str:
-    return os.environ["DATABASE_URL"]
-
-
-@pytest.fixture(scope="session", autouse=True)
-def run_migrations() -> None:
-    """Apply migrations for alert service tests."""
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", _database_url())
-    command.upgrade(cfg, "head")
-
-
-@pytest_asyncio.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Provide isolated async DB session for each alert test."""
-    engine = create_async_engine(_database_url(), future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-        await session.commit()
-        yield session
-
-    await engine.dispose()
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 async def _create_model(db_session: AsyncSession, name: str | None = None) -> UUID:

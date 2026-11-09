@@ -6,7 +6,7 @@ from the monitoring service, so MCP clients cannot disagree with its formulas.
 
 import json
 import os
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 from typing import Annotated, Any
 from uuid import UUID
@@ -131,6 +131,14 @@ async def _health(client: httpx.AsyncClient, model_id: UUID) -> dict[str, Any]:
     report = await _get_or_none(client, f"/reports/{model_id}/latest")
     snapshots = await _get(client, f"/ingest/snapshots/{model_id}")
     latest_snapshot = snapshots[0] if snapshots else None
+    unscored_windows = []
+    if latest_snapshot:
+        cutoff = (date.fromisoformat(latest_snapshot) - timedelta(days=6)).isoformat()
+        for day in snapshots:
+            if day < cutoff:
+                break
+            if not await _get(client, f"/drift/{model_id}/{day}"):
+                unscored_windows.append(day)
     try:
         window, features, prediction = await _feature_drift(client, model_id, None)
     except ApiError as exc:
@@ -139,13 +147,14 @@ async def _health(client: httpx.AsyncClient, model_id: UUID) -> dict[str, Any]:
         window, features, prediction = None, [], None
     severities = [row["severity"] for row in features]
     status = _status(severities + ([prediction["severity"]] if prediction else []))
-    if latest_snapshot and latest_snapshot != window and status != "critical":
+    if unscored_windows and status != "critical":
         status = "unknown"
     return {
         "model": model,
         "status": status,
         "latest_window": window,
         "latest_snapshot": latest_snapshot,
+        "unscored_windows": unscored_windows,
         "severity_counts": {s: severities.count(s) for s in ("red", "yellow", "green")},
         "prediction_severity": prediction["severity"] if prediction else None,
         "overall_score": report["overall_score"] if report else None,
@@ -178,8 +187,9 @@ def build_server(client: httpx.AsyncClient) -> FastMCP:
         """Get a model's status, severity counts and latest health score.
 
         Status is no_data, unknown, healthy, attention or critical, taken from the
-        severities stored for the latest scored window. A newer unscored snapshot
-        makes status unknown unless it is already critical. Health score comes from
+        severities stored for the latest scored window. unscored_windows lists
+        snapshots without scores in the seven days ending at the latest snapshot;
+        any such window makes status unknown unless already critical. Health score comes from
         the latest report; check
         report_covers_latest_window because that report can predate the latest window.
         """
@@ -272,7 +282,7 @@ def build_server(client: httpx.AsyncClient) -> FastMCP:
         """Investigate a model from stored evidence, computing no new statistics.
 
         Returns status, non-green features ranked by importance-weighted score, stable
-        features, prediction drift, active alerts and the limits of this evidence.
+        features, unscored_windows, prediction drift, active alerts and limitations.
         """
         health = await _health(client, model_id)
         features = health.pop("features")

@@ -20,7 +20,6 @@ from app.models.snapshot import Snapshot
 from app.schemas.ingest import PREDICTIONS_FEATURE_NAME
 from app.services import alert_service
 from app.services import importance_scorer
-from app.services.model_service import _compute_histogram
 
 logger = logging.getLogger(__name__)
 
@@ -112,30 +111,6 @@ def compute_binned_ks(reference: np.ndarray, production: np.ndarray) -> float:
                 np.cumsum(_count_proportions(ref)) - np.cumsum(_count_proportions(prod))
             )
         )
-    )
-
-
-def _sample_histogram_counts(
-    reference: np.ndarray, production: np.ndarray, bins: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Bin samples on shared reference edges, including out-of-range counts."""
-    ref, prod = _validate_inputs(reference, production)
-    if isinstance(bins, bool) or not isinstance(bins, (int, np.integer)) or bins < 1:
-        raise ValueError("bins must be a positive integer")
-    reference_histogram = _compute_histogram(ref.tolist(), bins=bins)
-    production_histogram = _compute_histogram(
-        prod.tolist(), bin_edges=reference_histogram["bin_edges"]
-    )
-    return tuple(
-        np.asarray([hist["underflow"], *hist["counts"], hist["overflow"]], dtype=float)
-        for hist in (reference_histogram, production_histogram)
-    )
-
-
-def compute_psi(reference: np.ndarray, production: np.ndarray, bins: int = 10) -> float:
-    """Compute uncapped PSI from samples using shared reference bins."""
-    return compute_psi_from_counts(
-        *_sample_histogram_counts(reference, production, bins)
     )
 
 

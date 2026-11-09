@@ -11,12 +11,9 @@ from app.config import Settings
 from app.schemas.ingest import SnapshotPayload
 from app.services.report_generator import _render_markdown_report
 from app.services.snapshot_service import ingest_snapshot
-from tests.test_reliability_fixes import (
-    ctx,  # noqa: F401
-    _model,
-    _reference,
-    run_migrations,  # noqa: F401
-)
+from tests.helpers import _model, _reference
+
+pytestmark = pytest.mark.usefixtures("run_migrations")
 
 
 def test_psi_threshold_settings() -> None:
@@ -33,7 +30,7 @@ def test_psi_threshold_settings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_analysis_invalidates_report(ctx) -> None:  # noqa: F811
+async def test_retry_analysis_invalidates_report(ctx) -> None:
     client, session_factory = ctx
     model_id = await _model(client)
     await _reference(client, model_id)
@@ -59,7 +56,7 @@ async def test_retry_analysis_invalidates_report(ctx) -> None:  # noqa: F811
 
 @pytest.mark.asyncio
 async def test_webhooks_run_in_parallel_without_an_open_transaction(
-    ctx,  # noqa: F811
+    ctx,
 ) -> None:
     client, session_factory = ctx
     model_id = await _model(client)
@@ -105,7 +102,7 @@ async def test_webhooks_run_in_parallel_without_an_open_transaction(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["a\nb", "a\tb", "a\x7fb"])
 async def test_control_characters_in_feature_names_are_rejected(
-    ctx,  # noqa: F811
+    ctx,
     name,
 ) -> None:
     client, _ = ctx
@@ -134,7 +131,7 @@ def test_report_table_escapes_pipes_in_feature_names() -> None:
 
 
 @pytest.mark.asyncio
-async def test_week_start_cannot_be_in_the_future(ctx) -> None:  # noqa: F811
+async def test_week_start_cannot_be_in_the_future(ctx) -> None:
     client, _ = ctx
     model_id = await _model(client)
     today = datetime.now(timezone.utc).date()

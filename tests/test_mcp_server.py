@@ -176,10 +176,12 @@ async def test_report_covers_latest_window(week_start, week_end, expected):
 async def test_newer_unscored_snapshot(severity, expected):
     routes = _monitored([_row("a", severity)])
     routes[f"/ingest/snapshots/{MODEL_ID}"] = (200, ["2026-01-08", "2026-01-07"])
+    routes[f"/drift/{MODEL_ID}/2026-01-08"] = (200, [])
     _, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
     assert payload["status"] == expected
     assert payload["latest_snapshot"] == "2026-01-08"
     assert payload["latest_window"] == "2026-01-07"
+    assert payload["unscored_windows"] == ["2026-01-08"]
 
 
 @pytest.mark.asyncio
@@ -187,11 +189,40 @@ async def test_snapshot_without_scored_window_is_unknown():
     routes = {
         f"/models/{MODEL_ID}": (200, {"id": MODEL_ID}),
         f"/ingest/snapshots/{MODEL_ID}": (200, ["2026-01-08"]),
+        f"/drift/{MODEL_ID}/2026-01-08": (200, []),
     }
     _, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
     assert payload["status"] == "unknown"
     assert payload["latest_snapshot"] == "2026-01-08"
     assert payload["latest_window"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["get_model_health", "analyze_model_health"])
+@pytest.mark.parametrize("severity,status", [("green", "unknown"), ("red", "critical")])
+async def test_recent_unscored_windows_and_cutoff(tool, severity, status):
+    routes = _monitored([_row("a", severity)])
+    routes[f"/ingest/snapshots/{MODEL_ID}"] = (
+        200,
+        ["2026-01-07", "2026-01-06", "2026-01-01", "2025-12-31"],
+    )
+    routes[f"/drift/{MODEL_ID}/2026-01-06"] = (200, [])
+    routes[f"/drift/{MODEL_ID}/2026-01-01"] = (200, [])
+    calls = []
+    result, payload = await _call(_api(routes, calls), tool, model_id=MODEL_ID)
+    assert not result.isError
+    assert payload["status"] == status
+    assert payload["unscored_windows"] == ["2026-01-06", "2026-01-01"]
+    assert f"/drift/{MODEL_ID}/2025-12-31" not in [url.path for url in calls]
+
+
+@pytest.mark.asyncio
+async def test_unscored_window_request_404_is_an_error():
+    routes = _monitored([_row("a", "green")])
+    routes[f"/ingest/snapshots/{MODEL_ID}"] = (200, ["2026-01-08"])
+    result, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
+    assert result.isError
+    assert payload["error"]["status"] == 404
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import httpx
 
 logger = logging.getLogger(__name__)
-NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?!\w)")
+NUMBER = re.compile(r"(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?!\w)")
 
 
 def _numbers(value):
@@ -23,13 +23,13 @@ def _numbers(value):
         yield Decimal(str(value))
     elif isinstance(value, str):
         for match in NUMBER.findall(value):
-            yield Decimal(match)
+            yield Decimal(match.replace(",", ""))
 
 
 def _supported(narrative, report):
     evidence = list(_numbers(report))
     for text in NUMBER.findall(narrative):
-        number = Decimal(text)
+        number = Decimal(text.replace(",", ""))
         if number == number.to_integral_value() and 1 <= number <= 5:
             continue
         precision = Decimal(1).scaleb(number.as_tuple().exponent)

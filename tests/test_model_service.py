@@ -4,10 +4,11 @@ import os
 from uuid import UUID, uuid4
 
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -37,14 +38,7 @@ async def db_session(run_migrations: None) -> AsyncSession:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
         yield session
 

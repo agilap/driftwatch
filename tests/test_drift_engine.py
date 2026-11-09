@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from tests.helpers import sample_psi
+
 import os
 from datetime import date
 from uuid import uuid4
 
 import numpy as np
 import pytest
+
+from tests.conftest import truncate_tables
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.drift_score import DriftScore
@@ -19,7 +23,6 @@ from app.models.reference_distribution import ReferenceDistribution
 from app.models.snapshot import Snapshot
 from app.services.drift_engine import (
     classify_severity,
-    compute_psi,
     run_drift_analysis,
 )
 from app.services.importance_scorer import resolve_feature_weights
@@ -30,7 +33,7 @@ def test_compute_psi_no_drift() -> None:
     reference = np.linspace(0.0, 1.0, 1000)
     production = np.linspace(0.0, 1.0, 1000)
 
-    psi = compute_psi(reference, production)
+    psi = sample_psi(reference, production)
 
     assert psi == pytest.approx(0.0, abs=1e-9)
 
@@ -40,7 +43,7 @@ def test_compute_psi_high_drift() -> None:
     reference = rng.normal(0.0, 1.0, 5000)
     production = rng.normal(3.0, 1.0, 5000)
 
-    psi = compute_psi(reference, production)
+    psi = sample_psi(reference, production)
 
     assert psi > 0.20
 
@@ -50,7 +53,7 @@ def test_compute_psi_extreme_shift_is_uncapped() -> None:
     production = np.asarray([10.0] * 100)
     # Three bins: underflow, finite reference bin, overflow. After smoothing,
     # the exchanged unit masses give 2 * log(10001) / (1 + 3 * EPSILON).
-    psi = compute_psi(reference, production, bins=1)
+    psi = sample_psi(reference, production, bins=1)
     assert psi == pytest.approx(2 * np.log(10001) / 1.0003)
     assert psi > 1.0
 
@@ -107,14 +110,7 @@ async def db_session(run_migrations: None) -> AsyncSession:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "alerts, health_reports, drift_scores, snapshots, "
-                "feature_importances, reference_distributions, models "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
+        await truncate_tables(session)
         await session.commit()
         yield session
 

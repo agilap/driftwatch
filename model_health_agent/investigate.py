@@ -128,9 +128,9 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
         unscored_snapshot = (
             latest_snapshot is not None and latest_snapshot != health["latest_window"]
         )
-        if unscored_snapshot:
+        for day in health["unscored_windows"]:
             recommendations.append(
-                f"Retry analysis for {latest_snapshot}: POST /drift/{model_id}/{latest_snapshot}/analyze"
+                f"Retry analysis for {day}: POST /drift/{model_id}/{day}/analyze"
             )
         result = {
             "model": health["model"],
@@ -138,6 +138,7 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
             "evidence": {
                 "window": health["latest_window"],
                 "latest_snapshot": latest_snapshot,
+                "unscored_windows": health["unscored_windows"],
                 "severity_counts": health["severity_counts"],
                 "prediction_severity": health["prediction_severity"],
                 "overall_score": health["overall_score"],

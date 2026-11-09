@@ -41,10 +41,7 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
             )
         return result.structuredContent
 
-    async def collect() -> dict:
-        return await call("analyze_model_health", model_id=model_id)
-
-    async def investigate(health: dict, model_id: str) -> list:
+    async def investigate(health: dict) -> list:
         names = [row["feature_name"] for row in health["problem_features"][:3]]
         if health["prediction_severity"] not in (None, "green"):
             names.append(PREDICTIONS_FEATURE_NAME)
@@ -156,8 +153,6 @@ async def investigate_model(session, model_id, narrate=None) -> dict:
         }
         return await (narrate or narrate_report)(result)
 
-    health = await collect()
-    findings = (
-        await investigate(health, model_id) if triage(health) == "investigate" else []
-    )
+    health = await call("analyze_model_health", model_id=model_id)
+    findings = await investigate(health) if triage(health) == "investigate" else []
     return await report(health, findings)

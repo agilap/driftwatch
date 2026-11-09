@@ -156,6 +156,21 @@ async def test_model_without_scores_has_no_data_rather_than_healthy():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "week_start, week_end, expected",
+    [("2025-12-29", "2026-01-04", False), ("2026-01-05", "2026-01-11", True)],
+)
+async def test_report_covers_latest_window(week_start, week_end, expected):
+    routes = _monitored([_row("a", "green")])
+    routes[f"/reports/{MODEL_ID}/latest"] = (
+        200,
+        {"week_start": week_start, "week_end": week_end, "overall_score": 0.5},
+    )
+    _, payload = await _call(_api(routes), "get_model_health", model_id=MODEL_ID)
+    assert payload["report_covers_latest_window"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "severity, expected", [("green", "unknown"), ("red", "critical")]
 )
 async def test_newer_unscored_snapshot(severity, expected):

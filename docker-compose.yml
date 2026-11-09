@@ -23,7 +23,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@db:5432/driftwatch
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
-      REPORT_SCHEDULE_CRON: ${REPORT_SCHEDULE_CRON:-0 0 * * mon}
+      REPORT_SCHEDULE_CRON: ${REPORT_SCHEDULE_CRON:-0 0 * * *}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DRIFTWATCH_API_KEY: ${DRIFTWATCH_API_KEY:-}
       PSI_YELLOW_THRESHOLD: ${PSI_YELLOW_THRESHOLD:-0.10}

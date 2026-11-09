@@ -52,7 +52,7 @@ async def request_logging_middleware(request: Request, call_next):
     logger.info(
         "method=%s path=%s status_code=%s duration_ms=%.2f",
         request.method,
-        request.url.path,
+        request.scope["path"],
         response.status_code,
         duration_ms,
     )

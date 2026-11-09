@@ -41,7 +41,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+asyncpg://driftwatch:driftwatch@localhost:5432/driftwatch_test
       ALERT_WEBHOOK_URL: ""
-      REPORT_SCHEDULE_CRON: "0 0 * * mon"
+      REPORT_SCHEDULE_CRON: "0 0 * * *"
       LOG_LEVEL: INFO
       PSI_YELLOW_THRESHOLD: "0.10"
       PSI_RED_THRESHOLD: "0.20"
@@ -78,6 +78,10 @@ jobs:
           echo "API did not become healthy in time"
           docker compose logs
           exit 1
+      - name: Verify API runs as non-root
+        run: |
+          uid=$(docker compose exec -T api id -u)
+          test "$uid" != 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

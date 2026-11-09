@@ -82,28 +82,25 @@ def test_count_metrics_reject_invalid_inputs(metric, ref, prod) -> None:
         metric(ref, prod)
 
 
-@pytest.mark.parametrize("metric", [compute_psi])
 @pytest.mark.parametrize("values", [[], [np.nan], [np.inf], [[1, 2]]])
-def test_sample_metrics_reject_invalid_inputs(metric, values) -> None:
+def test_sample_metrics_reject_invalid_inputs(values) -> None:
     with pytest.raises(ValueError):
-        metric(values, [1, 2])
+        compute_psi(values, [1, 2])
     with pytest.raises(ValueError):
-        metric([1, 2], values)
+        compute_psi([1, 2], values)
 
 
-@pytest.mark.parametrize("metric", [compute_psi])
 @pytest.mark.parametrize("bins", [0, -1, 1.5, True, "10", None])
-def test_sample_metrics_reject_invalid_bin_counts(metric, bins) -> None:
+def test_sample_metrics_reject_invalid_bin_counts(bins) -> None:
     with pytest.raises(ValueError):
-        metric([-2, -1], [-1, 0], bins=bins)
+        compute_psi([-2, -1], [-1, 0], bins=bins)
 
 
-@pytest.mark.parametrize("metric", [compute_psi])
-def test_negative_samples_constants_and_small_samples_are_valid(metric) -> None:
-    assert metric([-2], [-2]) == pytest.approx(0.0)
-    assert metric([-2, -1], [-2, -1]) == pytest.approx(0.0)
-    assert np.isfinite(metric([-2], [-1]))
-    assert metric([-2], [-1]) > 0
+def test_negative_samples_constants_and_small_samples_are_valid() -> None:
+    assert compute_psi([-2], [-2]) == pytest.approx(0.0)
+    assert compute_psi([-2, -1], [-2, -1]) == pytest.approx(0.0)
+    assert np.isfinite(compute_psi([-2], [-1]))
+    assert compute_psi([-2], [-1]) > 0
 
 
 def test_small_change_is_smaller_than_significant_shift() -> None:

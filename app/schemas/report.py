@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class HealthReportResponse(BaseModel):
@@ -31,4 +31,11 @@ class ReportListResponse(BaseModel):
 class ReportGenerateRequest(BaseModel):
     """Manual report generation request payload."""
 
-    week_start: date = Field(le=date.max - timedelta(days=6))
+    week_start: date
+
+    @field_validator("week_start")
+    @classmethod
+    def validate_week_start(cls, value: date) -> date:
+        if value > datetime.now(timezone.utc).date():
+            raise ValueError("week_start must not be in the future")
+        return value

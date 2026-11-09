@@ -99,12 +99,17 @@ async def _scores(sessions) -> dict:
     return {row.name: row.overall_score for row in rows}
 
 
-def test_default_cron_fires_on_monday() -> None:
+def test_default_cron_fires_every_day() -> None:
     default = Settings.model_fields["report_schedule_cron"].default
     trigger = CronTrigger.from_crontab(default, timezone="UTC")
     now = datetime(2026, 11, 8, 12, tzinfo=timezone.utc)
     assert trigger.get_next_fire_time(None, now) == datetime(
         2026, 11, 9, tzinfo=timezone.utc
+    )
+
+    now = datetime(2026, 11, 9, 12, tzinfo=timezone.utc)
+    assert trigger.get_next_fire_time(None, now) == datetime(
+        2026, 11, 10, tzinfo=timezone.utc
     )
 
 
@@ -123,6 +128,10 @@ async def test_job_reports_previous_monday_through_sunday(
         calls.append(kwargs)
         return Mock(overall_score=None)
 
+    async def no_report(db, model_id, week_start):
+        return None
+
+    monkeypatch.setattr(weekly_report, "get_report_for_week", no_report)
     monkeypatch.setattr(weekly_report, "generate_report", capture_report)
     await run_weekly_reports_job()
 
@@ -174,3 +183,43 @@ async def test_one_model_failing_does_not_stop_the_others(
     await run_weekly_reports_job()
     assert set(await _scores(sessions)) == {"b-works"}
     assert "Weekly report failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_existing_report_is_unchanged(sessions) -> None:
+    model = await _model(sessions, "existing")
+    await run_weekly_reports_job()
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        before = {
+            column.name: getattr(report, column.name)
+            for column in HealthReport.__table__.columns
+        }
+
+    await run_weekly_reports_job()
+
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        assert report.model_id == model.id
+        assert {
+            column.name: getattr(report, column.name)
+            for column in HealthReport.__table__.columns
+        } == before
+
+
+@pytest.mark.asyncio
+async def test_deleted_report_is_rebuilt(sessions) -> None:
+    model = await _model(sessions, "deleted")
+    await run_weekly_reports_job()
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        await session.delete(report)
+        await session.commit()
+
+    await run_weekly_reports_job()
+
+    today = datetime.now(timezone.utc).date()
+    async with sessions() as session:
+        report = (await session.execute(select(HealthReport))).scalar_one()
+        assert report.model_id == model.id
+        assert report.week_start == today - timedelta(days=today.weekday() + 7)

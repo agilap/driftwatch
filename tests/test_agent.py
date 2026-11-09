@@ -11,12 +11,24 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from driftwatch_mcp.server import build_server
+import model_health_agent.__main__ as agent_main
 from model_health_agent.__main__ import render_report
 from model_health_agent.investigate import ToolError, investigate_model, mean_direction
 from model_health_agent.narration import _supported, narrate_report
 
 MODEL_ID = str(uuid4())
 WINDOW = "2026-01-07"
+
+
+def test_main_rejects_invalid_model_id(monkeypatch, capsys):
+    from unittest.mock import Mock
+
+    run = Mock()
+    monkeypatch.setattr(agent_main, "run", run)
+    monkeypatch.setattr(sys, "argv", ["model_health_agent", "not-a-uuid"])
+    assert agent_main.main() == 2
+    assert "Invalid model ID" in capsys.readouterr().err
+    run.assert_not_called()
 
 
 def row(name, severity, score=0.0):

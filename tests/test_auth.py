@@ -78,3 +78,6 @@ async def test_wrong_key_is_rejected(
 @pytest.mark.asyncio
 async def test_unset_key_disables_auth(async_client: AsyncClient) -> None:
     assert (await async_client.get(PAST_AUTH_PATH)).status_code == 422
+    assert (
+        await async_client.get(PAST_AUTH_PATH, headers={"X-API-Key": KEY})
+    ).status_code == 422

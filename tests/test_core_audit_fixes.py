@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
@@ -134,17 +134,16 @@ def test_report_table_escapes_pipes_in_feature_names() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "week_start,status", [("9999-12-26", 422), ("9999-12-25", 200)]
-)
-async def test_week_start_cannot_overflow_the_calendar(
-    ctx,  # noqa: F811
-    week_start,
-    status,
-) -> None:
+async def test_week_start_cannot_be_in_the_future(ctx) -> None:  # noqa: F811
     client, _ = ctx
     model_id = await _model(client)
-    response = await client.post(
-        f"/reports/{model_id}/generate", json={"week_start": week_start}
-    )
-    assert response.status_code == status, response.text
+    today = datetime.now(timezone.utc).date()
+    for week_start, status in [
+        (today + timedelta(days=1), 422),
+        (date(9999, 12, 25), 422),
+        (today, 200),
+    ]:
+        response = await client.post(
+            f"/reports/{model_id}/generate", json={"week_start": week_start.isoformat()}
+        )
+        assert response.status_code == status, response.text

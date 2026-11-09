@@ -456,3 +456,85 @@ async def test_generate_report_returns_after_concurrent_deletion(
 
     assert deleted_ids == [report.id]
     assert report.id is not None
+
+
+def test_status_band_boundaries() -> None:
+    from app.services.report_generator import _status_band
+
+    assert [_status_band(score) for score in (80, 79.99, 60, 59.99)] == [
+        "GREEN",
+        "YELLOW",
+        "YELLOW",
+        "RED",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_regenerating_report_updates_details(db_session: AsyncSession) -> None:
+    model = await _create_model(db_session)
+    start, end = date(2026, 3, 16), date(2026, 3, 22)
+    await _insert_week_drift(
+        db_session, model.id, start, [{"feature_name": "income", "psi": 0.1}]
+    )
+    first = await generate_report(db_session, model.id, start, end)
+    first_json, first_markdown = first.report_json, first.report_markdown
+    scores = (
+        await db_session.scalars(
+            select(DriftScore).where(DriftScore.model_id == model.id)
+        )
+    ).all()
+    for score in scores:
+        score.psi = 0.9
+        score.severity = "red"
+        score.weighted_score = 0.9
+    await db_session.commit()
+    second = await generate_report(db_session, model.id, start, end)
+    assert second.report_json != first_json
+    assert second.report_markdown != first_markdown
+
+
+@pytest.mark.asyncio
+async def test_webhook_timeout_is_five_seconds() -> None:
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from app.models.alert import Alert
+    from app.services.alert_service import _dispatch_alert
+
+    alert = Alert(id=uuid4(), model_id=uuid4(), created_at=datetime.now(timezone.utc))
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.post = AsyncMock(return_value=MagicMock(status_code=200))
+    with patch(
+        "app.services.alert_service.settings.alert_webhook_url",
+        "https://example.com/hook",
+    ), patch(
+        "app.services.alert_service.httpx.AsyncClient", return_value=client
+    ) as constructor:
+        await _dispatch_alert(alert)
+    constructor.assert_called_once_with(timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_webhook_non_2xx_logs_error_without_url(caplog) -> None:
+    import logging
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, patch
+    from app.models.alert import Alert
+    from app.services.alert_service import _dispatch_alert
+
+    alert = Alert(id=uuid4(), model_id=uuid4(), created_at=datetime.now(timezone.utc))
+    url = "https://example.com/private-hook"
+    with patch("app.services.alert_service.settings.alert_webhook_url", url), patch(
+        "httpx.AsyncClient.post",
+        new=AsyncMock(return_value=type("Response", (), {"status_code": 500})()),
+    ), caplog.at_level(logging.INFO, logger="app.services.alert_service"):
+        await _dispatch_alert(alert)
+    assert any(
+        record.levelno == logging.ERROR
+        and str(alert.id) in record.message
+        and "500" in record.message
+        for record in caplog.records
+    )
+    assert "dispatched successfully" not in caplog.text
+    assert url not in caplog.text

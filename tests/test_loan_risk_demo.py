@@ -16,7 +16,17 @@ from examples.loan_risk_demo.config import (
     STABLE_SEED,
 )
 from examples.loan_risk_demo.generate_data import generate_data
+from examples.loan_risk_demo.run_demo import api_headers
 from examples.loan_risk_demo.train_model import train_model
+
+
+def test_api_headers(monkeypatch):
+    monkeypatch.setenv("DRIFTWATCH_API_KEY", "secret")
+    assert api_headers() == {"X-API-Key": "secret"}
+    monkeypatch.setenv("DRIFTWATCH_API_KEY", "")
+    assert api_headers() is None
+    monkeypatch.delenv("DRIFTWATCH_API_KEY")
+    assert api_headers() is None
 
 
 def test_data_determinism_and_shift_is_limited_to_selected_features():

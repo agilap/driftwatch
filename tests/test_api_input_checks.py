@@ -25,6 +25,23 @@ def test_name_length_boundaries():
         ReferencePayload(model_id=uuid4(), features={"x" * 256: [1.0]})
 
 
+@pytest.mark.parametrize("name", [" a", "a "])
+def test_feature_names_reject_surrounding_whitespace(name):
+    with pytest.raises(ValidationError):
+        ReferencePayload(model_id=uuid4(), features={name: [1.0]})
+
+
+@pytest.mark.asyncio
+async def test_request_log_uses_scope_path(async_client, caplog):
+    with caplog.at_level(logging.INFO, logger="driftwatch"):
+        response = await async_client.get(
+            "/health", headers={"Host": "x/models/fake-admin-action?"}
+        )
+    assert response.status_code == 200
+    assert "path=/health" in caplog.text
+    assert "fake-admin-action" not in caplog.text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["x" * 256, "m\n# Fake"])
 async def test_invalid_model_name_returns_422(async_client, name):

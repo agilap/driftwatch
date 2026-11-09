@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.auth import require_api_key
+from app.auth import require_api_key, valid_api_key
 from app.config import settings
 from app.database import check_database_readiness, engine
 from app.routers import alerts, drift, ingest, models, reports
@@ -47,7 +47,21 @@ app = FastAPI(title="DriftWatch", version="0.2.0", lifespan=lifespan)
 async def request_logging_middleware(request: Request, call_next):
     """Log one line per request with method/path/status/duration."""
     start = time.perf_counter()
-    response = await call_next(request)
+    if request.scope["path"] not in {
+        "/health",
+        "/ready",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+        "/openapi.json",
+    } and not valid_api_key(request.headers.get("X-API-Key")):
+        response = JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing API key"},
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    else:
+        response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
     logger.info(
         "method=%s path=%s status_code=%s duration_ms=%.2f",

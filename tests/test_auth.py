@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 import pytest
 from fastapi.routing import APIRoute
 from httpx import AsyncClient
@@ -50,8 +53,75 @@ async def test_probes_stay_open(
 
     monkeypatch.setattr("app.main.check_database_readiness", ready)
 
-    assert (await async_client.get("/health")).status_code == 200
-    assert (await async_client.get("/ready")).status_code == 200
+    for path in (
+        "/health",
+        "/ready",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+        "/openapi.json",
+    ):
+        assert (await async_client.get(path)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_missing_key_rejects_bad_json_and_logs(
+    async_client: AsyncClient, key_required: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="driftwatch"):
+        response = await async_client.post(
+            "/ingest/snapshot",
+            content=b"{",
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or missing API key"}
+    assert response.headers["WWW-Authenticate"] == "ApiKey"
+    assert len([r for r in caplog.records if "status_code=401" in r.message]) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_key_does_not_consume_body(key_required: None) -> None:
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/ingest/snapshot",
+        "raw_path": b"/ingest/snapshot",
+        "query_string": b"",
+        "headers": [(b"host", b"testserver"), (b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "root_path": "",
+    }
+    body_consumed = False
+    response_complete = asyncio.Event()
+    messages = []
+
+    async def receive():
+        nonlocal body_consumed
+        if not body_consumed:
+            body_consumed = True
+            return {"type": "http.request", "body": b"{", "more_body": False}
+        await response_complete.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        messages.append(message)
+        if message["type"] == "http.response.body" and not message.get(
+            "more_body", False
+        ):
+            response_complete.set()
+
+    await app(scope, receive, send)
+
+    assert (
+        next(m for m in messages if m["type"] == "http.response.start")["status"] == 401
+    )
+    assert not body_consumed
 
 
 @pytest.mark.asyncio

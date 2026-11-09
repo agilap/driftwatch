@@ -8,10 +8,11 @@ from uuid import UUID
 import numpy as np
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.alert import Alert
 from app.models.drift_score import DriftScore
 from app.models.health_report import HealthReport
 from app.models.model_registry import ModelRegistry
@@ -330,6 +331,20 @@ async def run_drift_analysis(
 
             if alert is not None:
                 new_alerts.append(alert)
+        else:
+            await db.execute(
+                update(Alert)
+                .where(
+                    Alert.model_id == model_id,
+                    Alert.window_date == window_date,
+                    Alert.feature_name == feature_name,
+                    Alert.superseded_at.is_(None),
+                )
+                .values(
+                    superseded_at=computed_at,
+                    resolved_at=func.coalesce(Alert.resolved_at, computed_at),
+                )
+            )
 
         severity_counts[severity] += 1
         results.append(
